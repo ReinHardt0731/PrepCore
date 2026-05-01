@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "theme": "midnight_blue",
+  "app_state_dir": "app_state",
+  "app_name": "PrepCore",
+  "app_icon": "icon.png",
+  "app_logo": "Logo_rounded.png",
+  "custom_data_path": "F:\\Projects\\Coding\\BOARDEXAMAPP\\app_state"
+}

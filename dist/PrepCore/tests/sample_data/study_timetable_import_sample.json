@@ -1,0 +1,175 @@
+{
+  "schema_version": 1,
+  "template_name": "Board Exam Planner Import Sample",
+  "template_notes": "This sample matches the app backup import format used by File > Import. Other platforms can generate the same keys and replace the sample values.",
+  "selected_subject": "Sample Aerodynamics",
+  "subjects": [
+    {
+      "name": "Sample Aerodynamics",
+      "chapters": [
+        "Chapter 1 - Fundamentals",
+        "Chapter 2 - Lift and Drag",
+        "Chapter 3 - Performance Review"
+      ]
+    }
+  ],
+  "quiz_banks": {
+    "Sample Aerodynamics": {
+      "short_quiz": {
+        "schema_version": 1,
+        "quiz_type": "short_quiz",
+        "subject": "Sample Aerodynamics",
+        "selected_chapter": "Chapter 1 - Fundamentals",
+        "chapters": [
+          {
+            "title": "Chapter 1 - Fundamentals",
+            "questions": [
+              {
+                "question": "What does Bernoulli's principle relate in steady incompressible flow?",
+                "choices": [
+                  "Velocity and pressure",
+                  "Mass and density",
+                  "Temperature and entropy",
+                  "Voltage and current"
+                ],
+                "answer_index": 0,
+                "answer_text": "Velocity and pressure",
+                "explanation": "Bernoulli's principle links pressure, velocity, and elevation along a streamline.",
+                "tags": [
+                  "bernoulli",
+                  "fundamentals"
+                ]
+              },
+              {
+                "question": "Which force acts perpendicular to the relative wind?",
+                "choices": [
+                  "Drag",
+                  "Weight",
+                  "Lift",
+                  "Thrust"
+                ],
+                "answer_index": 2,
+                "answer_text": "Lift",
+                "explanation": "Lift acts perpendicular to the relative wind.",
+                "tags": [
+                  "forces",
+                  "lift"
+                ]
+              }
+            ]
+          },
+          {
+            "title": "Chapter 2 - Lift and Drag",
+            "questions": [
+              {
+                "question": "Which drag component becomes dominant at high angles of attack before stall?",
+                "choices": [
+                  "Induced drag",
+                  "Skin-friction drag",
+                  "Wave drag",
+                  "Profile drag only"
+                ],
+                "answer_index": 0,
+                "answer_text": "Induced drag",
+                "explanation": "Induced drag increases significantly as lift coefficient rises.",
+                "tags": [
+                  "drag",
+                  "angle_of_attack"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "long_quiz": {
+        "schema_version": 1,
+        "quiz_type": "long_quiz",
+        "subject": "Sample Aerodynamics",
+        "selected_chapter": "Chapter 3 - Performance Review",
+        "chapters": [
+          {
+            "title": "Chapter 3 - Performance Review",
+            "questions": [
+              {
+                "question": "Why does increasing aircraft weight generally increase stall speed?",
+                "choices": [
+                  "Because heavier aircraft always reduce wing area in flight",
+                  "Because more lift coefficient is required to balance weight",
+                  "Because drag becomes zero near stall",
+                  "Because thrust directly lowers the lift requirement"
+                ],
+                "answer_index": 1,
+                "answer_text": "Because more lift coefficient is required to balance weight",
+                "explanation": "A heavier aircraft must produce more lift, which raises the required stall speed for the same configuration.",
+                "tags": [
+                  "stall_speed",
+                  "performance"
+                ]
+              },
+              {
+                "question": "During climb planning, which combination is usually important to monitor together?",
+                "choices": [
+                  "Lift coefficient and paint color",
+                  "Rate of climb and excess power",
+                  "Cabin lighting and flap handle texture",
+                  "Marker beacon volume and tire pressure"
+                ],
+                "answer_index": 1,
+                "answer_text": "Rate of climb and excess power",
+                "explanation": "Climb performance depends strongly on available excess power.",
+                "tags": [
+                  "climb",
+                  "performance"
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "time_organizer": {
+    "Sample Aerodynamics": {
+      "subject": "Sample Aerodynamics",
+      "selected_date": "2026-05-04",
+      "tasks": [
+        {
+          "title": "Review Chapter 1 summary",
+          "start_date": "2026-05-04",
+          "end_date": "2026-05-04",
+          "notes": "Focus on Bernoulli, continuity, and aerodynamic forces.",
+          "subject": "Sample Aerodynamics"
+        },
+        {
+          "title": "Solve lift and drag practice set",
+          "start_date": "2026-05-05",
+          "end_date": "2026-05-06",
+          "notes": "Work through coefficient interpretation and induced drag trends.",
+          "subject": "Sample Aerodynamics"
+        },
+        {
+          "title": "Mock quiz and error review",
+          "start_date": "2026-05-07",
+          "end_date": "2026-05-07",
+          "notes": "Use the long-quiz chapter and summarize mistakes.",
+          "subject": "Sample Aerodynamics"
+        }
+      ],
+      "todo_items": [
+        {
+          "text": "Import short quiz bank",
+          "done": true
+        },
+        {
+          "text": "Finish Chapter 2 formulas sheet",
+          "done": false
+        },
+        {
+          "text": "Schedule mock test block",
+          "done": false
+        }
+      ],
+      "selected_timer_mode": "pomodoro"
+    }
+  }
+}

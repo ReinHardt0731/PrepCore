@@ -1,0 +1,354 @@
+[
+  {
+    "question": "An airfoil has CD0 = 0.02 and k = 0.04. At what CL is total drag coefficient minimized?",
+    "choices": ["0.50", "0.71", "1.00", "1.41"],
+    "answer_index": 1,
+    "answer_text": "0.71",
+    "explanation": "Minimum drag occurs when CD0 = kCL² → CL = √(CD0/k) = √(0.02/0.04) = 0.71.",
+    "tags": ["drag", "extreme"]
+  },
+  {
+    "question": "For the same airfoil, what is minimum drag coefficient?",
+    "choices": ["0.02", "0.03", "0.04", "0.05"],
+    "answer_index": 2,
+    "answer_text": "0.04",
+    "explanation": "CDmin = CD0 + kCL² = 0.02 + 0.02 = 0.04.",
+    "tags": ["drag"]
+  },
+  {
+    "question": "If CL doubles while velocity is reduced by half, lift will:",
+    "choices": ["Increase", "Decrease", "Remain constant", "Quadruple"],
+    "answer_index": 1,
+    "answer_text": "Decrease",
+    "explanation": "L ∝ CL × V² → 2 × (0.5²) = 2 × 0.25 = 0.5 → decreases.",
+    "tags": ["trap"]
+  },
+  {
+    "question": "An aircraft maintains constant lift while velocity increases by 2×. What happens to induced drag?",
+    "choices": ["Increases", "Decreases by 4×", "Remains same", "Doubles"],
+    "answer_index": 1,
+    "answer_text": "Decreases by 4×",
+    "explanation": "CL decreases and induced drag ∝ CL² → reduces significantly.",
+    "tags": ["trap"]
+  },
+  {
+    "question": "If CD0 is reduced by half but CL remains unchanged, total drag coefficient will:",
+    "choices": ["Decrease but not by half", "Decrease by half", "Remain same", "Increase"],
+    "answer_index": 0,
+    "answer_text": "Decrease but not by half",
+    "explanation": "Only parasite portion reduced; induced drag unchanged.",
+    "tags": ["trap"]
+  },
+  {
+    "question": "At very low CL, drag is dominated by:",
+    "choices": ["Induced drag", "Parasite drag", "Lift drag", "Wave drag"],
+    "answer_index": 1,
+    "answer_text": "Parasite drag",
+    "explanation": "Induced drag negligible at low CL.",
+    "tags": ["trap"]
+  },
+  {
+    "question": "An airfoil has CL = 0.5 and CD = 0.05. If CL increases to 1.0 and CD becomes 0.12, L/D ratio:",
+    "choices": ["Increases", "Decreases", "Remains same", "Doubles"],
+    "answer_index": 1,
+    "answer_text": "Decreases",
+    "explanation": "Initial L/D = 10, new L/D ≈ 8.3.",
+    "tags": ["performance"]
+  },
+  {
+    "question": "If aspect ratio increases but CD0 also increases slightly, induced drag will:",
+    "choices": ["Increase", "Decrease", "Remain same", "Become zero"],
+    "answer_index": 1,
+    "answer_text": "Decrease",
+    "explanation": "Induced drag depends on AR, not CD0.",
+    "tags": ["trap"]
+  },
+  {
+    "question": "Which condition produces maximum L/D?",
+    "choices": ["CL = 0", "CD0 = kCL²", "CL = CD", "CL² = CD"],
+    "answer_index": 1,
+    "answer_text": "CD0 = kCL²",
+    "explanation": "Same condition as minimum drag.",
+    "tags": ["concept"]
+  },
+  {
+    "question": "If velocity increases while CL decreases to maintain constant lift, parasite drag:",
+    "choices": ["Decreases", "Increases significantly", "Remains constant", "Becomes zero"],
+    "answer_index": 1,
+    "answer_text": "Increases significantly",
+    "explanation": "Parasite drag ∝ V² regardless of CL.",
+    "tags": ["trap"]
+  },
+
+  {
+    "question": "A wing with AR = 10 produces induced drag coefficient of 0.04. If AR drops to 5, new induced drag coefficient is:",
+    "choices": ["0.02", "0.04", "0.08", "0.10"],
+    "answer_index": 2,
+    "answer_text": "0.08",
+    "explanation": "Induced drag ∝ 1/AR → halves AR → doubles drag.",
+    "tags": ["calculation"]
+  },
+  {
+    "question": "If both CL and CD double, L/D ratio will:",
+    "choices": ["Double", "Halve", "Remain same", "Quadruple"],
+    "answer_index": 2,
+    "answer_text": "Remain same",
+    "explanation": "Ratio unchanged.",
+    "tags": ["trap"]
+  },
+  {
+    "question": "Which parameter does NOT directly affect drag coefficient?",
+    "choices": ["Shape", "Surface roughness", "Velocity", "Aspect ratio"],
+    "answer_index": 2,
+    "answer_text": "Velocity",
+    "explanation": "Velocity affects drag force, not coefficient.",
+    "tags": ["trap"]
+  },
+  {
+    "question": "If CD remains constant and velocity doubles, drag force becomes:",
+    "choices": ["Double", "Triple", "Quadruple", "Same"],
+    "answer_index": 2,
+    "answer_text": "Quadruple",
+    "explanation": "Drag force ∝ V².",
+    "tags": ["calculation"]
+  },
+  {
+    "question": "An airfoil operates at CL = 0.7 for max L/D. Increasing CL further will:",
+    "choices": ["Increase efficiency", "Decrease efficiency", "Not affect efficiency", "Increase velocity"],
+    "answer_index": 1,
+    "answer_text": "Decrease efficiency",
+    "explanation": "Beyond optimum CL, drag increases faster.",
+    "tags": ["performance"]
+  },
+  {
+    "question": "If CD0 → 0 (ideal case), total drag becomes:",
+    "choices": ["Zero", "Only induced drag", "Only parasite drag", "Infinite"],
+    "answer_index": 1,
+    "answer_text": "Only induced drag",
+    "explanation": "Only lift-related drag remains.",
+    "tags": ["concept"]
+  },
+  {
+    "question": "Which change improves L/D the most?",
+    "choices": ["Increase velocity", "Decrease CD0", "Increase CL indefinitely", "Decrease density"],
+    "answer_index": 1,
+    "answer_text": "Decrease CD0",
+    "explanation": "Reducing parasite drag improves efficiency globally.",
+    "tags": ["trap"]
+  },
+  {
+    "question": "At CL = 0, induced drag is:",
+    "choices": ["Maximum", "Minimum", "Zero", "Constant"],
+    "answer_index": 2,
+    "answer_text": "Zero",
+    "explanation": "No lift means no induced drag.",
+    "tags": ["concept"]
+  },
+  {
+    "question": "If CL increases linearly but CD increases quadratically, L/D will:",
+    "choices": ["Increase", "Decrease", "Remain constant", "Oscillate"],
+    "answer_index": 1,
+    "answer_text": "Decrease",
+    "explanation": "Drag grows faster than lift.",
+    "tags": ["trap"]
+  },
+  {
+    "question": "Which is TRUE about aerodynamic center vs center of pressure?",
+    "choices": [
+      "Both move with AoA",
+      "Both fixed",
+      "AC fixed, CP moves",
+      "CP fixed, AC moves"
+    ],
+    "answer_index": 2,
+    "answer_text": "AC fixed, CP moves",
+    "explanation": "Classic board trap.",
+    "tags": ["concept", "trap"]
+  },
+  {
+    "question": "An airfoil is in a freestream of 100 m/s at sea level (ρ = 1.225 kg/m³, p∞ = 101325 Pa). At a point on the surface, the pressure coefficient is Cp = -2. What is the pressure at that point?",
+    "choices": ["76,325 Pa", "89,075 Pa", "101,325 Pa", "113,575 Pa"],
+    "answer_index": 0,
+    "answer_text": "76,325 Pa",
+    "explanation": "Cp = (p - p∞)/(0.5ρV²). Solve for p → p = p∞ + Cp(0.5ρV²).",
+    "tags": ["cp", "extreme"]
+  },
+  {
+    "question": "Freestream velocity is 80 m/s. At a point on the wing, velocity is 120 m/s. What is the pressure coefficient at that point (incompressible)?",
+    "choices": ["-0.75", "-1.25", "-1.50", "-2.25"],
+    "answer_index": 1,
+    "answer_text": "-1.25",
+    "explanation": "Cp = 1 - (V/V∞)² = 1 - (120/80)² = -1.25.",
+    "tags": ["cp", "trap"]
+  },
+  {
+    "question": "At a point where Cp = -3, which statement is TRUE?",
+    "choices": [
+      "Pressure is higher than freestream",
+      "Velocity is lower than freestream",
+      "Velocity is greater than freestream",
+      "Flow is stagnant"
+    ],
+    "answer_index": 2,
+    "answer_text": "Velocity is greater than freestream",
+    "explanation": "Negative Cp means higher velocity than freestream.",
+    "tags": ["concept", "trap"]
+  },
+  {
+    "question": "If Cp = 1 at a point on an airfoil, the flow at that point is:",
+    "choices": ["Supersonic", "Maximum velocity", "Stagnation point", "Separated flow"],
+    "answer_index": 2,
+    "answer_text": "Stagnation point",
+    "explanation": "Cp = 1 corresponds to V = 0.",
+    "tags": ["concept"]
+  },
+  {
+    "question": "Freestream velocity is 60 m/s. At a point, Cp = -0.5. What is the local velocity?",
+    "choices": ["73.5 m/s", "84.9 m/s", "92.1 m/s", "100.0 m/s"],
+    "answer_index": 1,
+    "answer_text": "84.9 m/s",
+    "explanation": "Cp = 1 - (V/V∞)² → solve for V.",
+    "tags": ["calculation"]
+  },
+  {
+    "question": "Which Cp value indicates the lowest pressure?",
+    "choices": ["+1", "0", "-1", "-3"],
+    "answer_index": 3,
+    "answer_text": "-3",
+    "explanation": "More negative Cp → lower pressure.",
+    "tags": ["trap"]
+  },
+  {
+    "question": "At a point where velocity is twice the freestream, Cp is:",
+    "choices": ["-1", "-2", "-3", "-4"],
+    "answer_index": 2,
+    "answer_text": "-3",
+    "explanation": "Cp = 1 - (2²) = -3.",
+    "tags": ["calculation"]
+  },
+  {
+    "question": "If Cp = -1 at a point, the velocity ratio V/V∞ is:",
+    "choices": ["1.0", "√2", "2.0", "0.5"],
+    "answer_index": 1,
+    "answer_text": "√2",
+    "explanation": "1 - (V/V∞)² = -1 → V/V∞ = √2.",
+    "tags": ["trap"]
+  },
+  {
+    "question": "Critical pressure corresponds to:",
+    "choices": [
+      "Maximum pressure",
+      "Minimum pressure before cavitation/compressibility effects",
+      "Zero pressure",
+      "Atmospheric pressure"
+    ],
+    "answer_index": 1,
+    "answer_text": "Minimum pressure before cavitation/compressibility effects",
+    "explanation": "Critical pressure is lowest allowable pressure before flow breakdown.",
+    "tags": ["concept"]
+  },
+  {
+    "question": "If Cp becomes more negative beyond critical value, what happens?",
+    "choices": [
+      "Flow remains unchanged",
+      "Velocity decreases",
+      "Compressibility or cavitation effects occur",
+      "Pressure increases"
+    ],
+    "answer_index": 2,
+    "answer_text": "Compressibility or cavitation effects occur",
+    "explanation": "Flow physics changes beyond critical Cp.",
+    "tags": ["trap"]
+  },
+
+  {
+    "question": "Freestream dynamic pressure is 5000 Pa. If Cp = -1.5, pressure difference from freestream is:",
+    "choices": ["-2500 Pa", "-5000 Pa", "-7500 Pa", "-10,000 Pa"],
+    "answer_index": 2,
+    "answer_text": "-7500 Pa",
+    "explanation": "Δp = Cp × q∞.",
+    "tags": ["calculation"]
+  },
+  {
+    "question": "If velocity at a point equals freestream velocity, Cp is:",
+    "choices": ["1", "0", "-1", "Undefined"],
+    "answer_index": 1,
+    "answer_text": "0",
+    "explanation": "No pressure difference.",
+    "tags": ["concept"]
+  },
+  {
+    "question": "Which condition gives Cp > 0?",
+    "choices": [
+      "Velocity > freestream",
+      "Velocity < freestream",
+      "Velocity = 0",
+      "Both B and C"
+    ],
+    "answer_index": 3,
+    "answer_text": "Both B and C",
+    "explanation": "Lower velocity → higher pressure.",
+    "tags": ["trap"]
+  },
+  {
+    "question": "If Cp = -4, velocity ratio is:",
+    "choices": ["2", "√3", "√5", "3"],
+    "answer_index": 2,
+    "answer_text": "√5",
+    "explanation": "1 - V² = -4 → V² = 5.",
+    "tags": ["extreme"]
+  },
+  {
+    "question": "At stagnation point, Cp is always:",
+    "choices": ["0", "1", "-1", "∞"],
+    "answer_index": 1,
+    "answer_text": "1",
+    "explanation": "Maximum pressure point.",
+    "tags": ["concept"]
+  },
+  {
+    "question": "If freestream velocity doubles, dynamic pressure changes by:",
+    "choices": ["2x", "3x", "4x", "8x"],
+    "answer_index": 2,
+    "answer_text": "4x",
+    "explanation": "q ∝ V².",
+    "tags": ["trap"]
+  },
+  {
+    "question": "If Cp is constant but velocity doubles, pressure difference:",
+    "choices": ["Halves", "Doubles", "Quadruples", "Remains same"],
+    "answer_index": 2,
+    "answer_text": "Quadruples",
+    "explanation": "Depends on dynamic pressure.",
+    "tags": ["trap"]
+  },
+  {
+    "question": "Negative Cp implies:",
+    "choices": ["Higher pressure", "Lower velocity", "Lower pressure", "No flow"],
+    "answer_index": 2,
+    "answer_text": "Lower pressure",
+    "explanation": "High velocity region.",
+    "tags": ["concept"]
+  },
+  {
+    "question": "Which scenario gives maximum suction on an airfoil?",
+    "choices": ["Cp = 1", "Cp = 0", "Cp = -1", "Cp = -5"],
+    "answer_index": 3,
+    "answer_text": "Cp = -5",
+    "explanation": "Most negative Cp = strongest suction.",
+    "tags": ["trap"]
+  },
+  {
+    "question": "If Cp distribution becomes extremely negative locally, this most likely indicates:",
+    "choices": [
+      "Laminar flow",
+      "Flow separation",
+      "High-speed acceleration and possible shock",
+      "No lift"
+    ],
+    "answer_index": 2,
+    "answer_text": "High-speed acceleration and possible shock",
+    "explanation": "Extreme Cp often linked to compressibility.",
+    "tags": ["extreme"]
+  }
+]

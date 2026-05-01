@@ -1,0 +1,699 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>MainWindow</class>
+ <widget class="QMainWindow" name="MainWindow">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>918</width>
+    <height>665</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>PrepCore</string>
+  </property>
+  <widget class="QWidget" name="centralwidget">
+   <layout class="QGridLayout" name="gridLayout">
+    <item row="0" column="1" rowspan="5">
+     <widget class="QScrollArea" name="scrollArea">
+      <property name="maximumSize">
+       <size>
+        <width>20</width>
+        <height>16777215</height>
+       </size>
+      </property>
+      <property name="widgetResizable">
+       <bool>true</bool>
+      </property>
+      <widget class="QWidget" name="scrollAreaWidgetContents">
+       <property name="geometry">
+        <rect>
+         <x>0</x>
+         <y>0</y>
+         <width>18</width>
+         <height>623</height>
+        </rect>
+       </property>
+      </widget>
+     </widget>
+    </item>
+    <item row="2" column="0" rowspan="3">
+     <widget class="QSplitter" name="center_splitter">
+      <property name="orientation">
+       <enum>Qt::Orientation::Vertical</enum>
+      </property>
+      <widget class="QTabWidget" name="time_organizer">
+       <property name="minimumSize">
+        <size>
+         <width>0</width>
+         <height>200</height>
+        </size>
+       </property>
+       <property name="currentIndex">
+        <number>2</number>
+       </property>
+       <widget class="QWidget" name="gant_chart">
+        <attribute name="title">
+         <string>Gantt Chart</string>
+        </attribute>
+       </widget>
+       <widget class="QWidget" name="calendar">
+        <attribute name="title">
+         <string>Calendar</string>
+        </attribute>
+       </widget>
+       <widget class="QWidget" name="todo_list_2">
+        <attribute name="title">
+         <string>TodoList</string>
+        </attribute>
+       </widget>
+      </widget>
+      <widget class="QTabWidget" name="TaskTabs">
+      <property name="tabShape">
+       <enum>QTabWidget::TabShape::Rounded</enum>
+      </property>
+      <property name="currentIndex">
+       <number>1</number>
+      </property>
+      <widget class="QWidget" name="todo_list">
+       <attribute name="title">
+        <string>Outline</string>
+       </attribute>
+       <layout class="QVBoxLayout" name="verticalLayout_outline">
+        <item>
+         <layout class="QHBoxLayout" name="horizontalLayout_outline_toolbar">
+          <item>
+           <widget class="QLabel" name="outline_mode_label">
+            <property name="text">
+             <string>Editor</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <spacer name="horizontalSpacer_outline_toolbar">
+            <property name="orientation">
+             <enum>Qt::Orientation::Horizontal</enum>
+            </property>
+            <property name="sizeHint" stdset="0">
+             <size>
+              <width>40</width>
+              <height>20</height>
+             </size>
+            </property>
+           </spacer>
+          </item>
+          <item>
+           <widget class="QPushButton" name="outline_toggle_button">
+            <property name="text">
+             <string>Switch to Reader</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </item>
+        <item>
+         <widget class="QStackedWidget" name="outline_stack">
+          <property name="currentIndex">
+           <number>0</number>
+          </property>
+          <widget class="QWidget" name="outline_editor_page">
+           <layout class="QVBoxLayout" name="verticalLayout_outline_editor">
+            <item>
+             <widget class="QPlainTextEdit" name="outline_editor">
+              <property name="placeholderText">
+               <string>Write your outline markup here using Markdown.</string>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </widget>
+          <widget class="QWidget" name="outline_reader_page">
+           <layout class="QVBoxLayout" name="verticalLayout_outline_reader">
+            <item>
+             <widget class="QTextBrowser" name="outline_reader"/>
+            </item>
+           </layout>
+          </widget>
+         </widget>
+        </item>
+       </layout>
+      </widget>
+      <widget class="QWidget" name="short_quiz">
+       <attribute name="title">
+        <string>ShortQuiz</string>
+       </attribute>
+       <layout class="QVBoxLayout" name="verticalLayout_short_quiz_root">
+        <item>
+         <widget class="QSplitter" name="horizontalSplitter_short_quiz_root">
+          <property name="orientation">
+           <enum>Qt::Orientation::Horizontal</enum>
+          </property>
+        <widget class="QWidget" name="short_quiz_left_panel">
+         <layout class="QVBoxLayout" name="verticalLayout_short_quiz_left">
+          <property name="leftMargin">
+           <number>0</number>
+          </property>
+          <property name="topMargin">
+           <number>0</number>
+          </property>
+          <property name="rightMargin">
+           <number>8</number>
+          </property>
+          <property name="bottomMargin">
+           <number>0</number>
+          </property>
+          <item>
+           <widget class="QWidget" name="short_quiz_toolbar">
+            <layout class="QHBoxLayout" name="horizontalLayout_short_quiz_toolbar">
+             <item>
+              <widget class="QLabel" name="short_quiz_title_label">
+               <property name="text">
+                <string>Short Quiz</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <spacer name="horizontalSpacer_short_quiz_toolbar">
+               <property name="orientation">
+                <enum>Qt::Orientation::Horizontal</enum>
+               </property>
+               <property name="sizeHint" stdset="0">
+                <size>
+                 <width>40</width>
+                 <height>20</height>
+                </size>
+               </property>
+              </spacer>
+             </item>
+             <item>
+              <widget class="QLabel" name="short_quiz_status_label">
+               <property name="text">
+                <string>0 chapters loaded</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QPushButton" name="short_quiz_add_chapter_button">
+               <property name="text">
+                <string>Add Chapter</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QPushButton" name="short_quiz_import_button">
+               <property name="text">
+                <string>Import</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QPushButton" name="short_quiz_export_button">
+               <property name="text">
+                <string>Export</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLabel" name="short_quiz_chapter_header_label">
+            <property name="text">
+             <string>Chapters</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QListWidget" name="short_quiz_chapter_list"/>
+          </item>
+          <item>
+           <widget class="QWidget" name="short_quiz_question_toolbar">
+            <layout class="QHBoxLayout" name="horizontalLayout_short_quiz_question_toolbar">
+             <property name="leftMargin">
+              <number>0</number>
+             </property>
+             <property name="topMargin">
+              <number>0</number>
+             </property>
+             <property name="rightMargin">
+              <number>0</number>
+             </property>
+             <property name="bottomMargin">
+              <number>0</number>
+             </property>
+             <item>
+              <widget class="QLabel" name="short_quiz_question_header_label">
+               <property name="text">
+                <string>Questions</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <spacer name="horizontalSpacer_short_quiz_question_toolbar">
+               <property name="orientation">
+                <enum>Qt::Orientation::Horizontal</enum>
+               </property>
+               <property name="sizeHint" stdset="0">
+                <size>
+                 <width>40</width>
+                 <height>20</height>
+                </size>
+               </property>
+              </spacer>
+             </item>
+             <item>
+              <widget class="QLabel" name="short_quiz_question_status_label">
+               <property name="text">
+                <string>0 questions</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QPushButton" name="short_quiz_add_question_button">
+               <property name="text">
+                <string>Add Question</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QPushButton" name="short_quiz_edit_question_button">
+               <property name="text">
+                <string>Edit</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QPushButton" name="short_quiz_delete_question_button">
+               <property name="text">
+                <string>Delete</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </widget>
+          </item>
+          <item>
+           <widget class="QListWidget" name="short_quiz_question_list"/>
+          </item>
+         </layout>
+        </widget>
+        <widget class="QWidget" name="short_quiz_answer_panel">
+         <layout class="QVBoxLayout" name="verticalLayout_short_quiz_answer_panel">
+          <property name="leftMargin">
+           <number>8</number>
+          </property>
+          <property name="topMargin">
+           <number>0</number>
+          </property>
+          <property name="rightMargin">
+           <number>0</number>
+          </property>
+          <property name="bottomMargin">
+           <number>0</number>
+          </property>
+          <item>
+           <widget class="QLabel" name="short_quiz_answer_header_label">
+            <property name="text">
+             <string>Answer Board</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QScrollArea" name="short_quiz_answer_scroll">
+            <property name="widgetResizable">
+             <bool>true</bool>
+            </property>
+            <widget class="QWidget" name="short_quiz_answer_container">
+             <property name="geometry">
+              <rect>
+               <x>0</x>
+               <y>0</y>
+               <width>320</width>
+               <height>400</height>
+              </rect>
+             </property>
+             <layout class="QVBoxLayout" name="verticalLayout_short_quiz_answer_cards">
+              <property name="leftMargin">
+               <number>0</number>
+              </property>
+              <property name="topMargin">
+               <number>0</number>
+              </property>
+              <property name="rightMargin">
+               <number>0</number>
+              </property>
+              <property name="bottomMargin">
+               <number>0</number>
+              </property>
+             </layout>
+            </widget>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+         </widget>
+        </item>
+       </layout>
+      </widget>
+      <widget class="QWidget" name="long_quiz">
+       <attribute name="title">
+        <string>LongQuiz</string>
+       </attribute>
+       <layout class="QVBoxLayout" name="verticalLayout_long_quiz_root">
+        <item>
+         <widget class="QSplitter" name="horizontalSplitter_long_quiz_root">
+          <property name="orientation">
+           <enum>Qt::Orientation::Horizontal</enum>
+          </property>
+        <widget class="QWidget" name="long_quiz_left_panel">
+         <layout class="QVBoxLayout" name="verticalLayout_long_quiz_left">
+          <property name="leftMargin">
+           <number>0</number>
+          </property>
+          <property name="topMargin">
+           <number>0</number>
+          </property>
+          <property name="rightMargin">
+           <number>8</number>
+          </property>
+          <property name="bottomMargin">
+           <number>0</number>
+          </property>
+          <item>
+           <widget class="QWidget" name="long_quiz_toolbar">
+            <layout class="QHBoxLayout" name="horizontalLayout_long_quiz_toolbar">
+             <item>
+              <widget class="QLabel" name="long_quiz_title_label">
+               <property name="text">
+                <string>Long Quiz</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <spacer name="horizontalSpacer_long_quiz_toolbar">
+               <property name="orientation">
+                <enum>Qt::Orientation::Horizontal</enum>
+               </property>
+               <property name="sizeHint" stdset="0">
+                <size>
+                 <width>40</width>
+                 <height>20</height>
+                </size>
+               </property>
+              </spacer>
+             </item>
+             <item>
+              <widget class="QLabel" name="long_quiz_status_label">
+               <property name="text">
+                <string>0 chapters loaded</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QPushButton" name="long_quiz_add_chapter_button">
+               <property name="text">
+                <string>Add Chapter</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QPushButton" name="long_quiz_import_button">
+               <property name="text">
+                <string>Import</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QPushButton" name="long_quiz_export_button">
+               <property name="text">
+                <string>Export</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLabel" name="long_quiz_chapter_header_label">
+            <property name="text">
+             <string>Chapters</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QListWidget" name="long_quiz_chapter_list"/>
+          </item>
+          <item>
+           <widget class="QWidget" name="long_quiz_question_toolbar">
+            <layout class="QHBoxLayout" name="horizontalLayout_long_quiz_question_toolbar">
+             <property name="leftMargin">
+              <number>0</number>
+             </property>
+             <property name="topMargin">
+              <number>0</number>
+             </property>
+             <property name="rightMargin">
+              <number>0</number>
+             </property>
+             <property name="bottomMargin">
+              <number>0</number>
+             </property>
+             <item>
+              <widget class="QLabel" name="long_quiz_question_header_label">
+               <property name="text">
+                <string>Questions</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <spacer name="horizontalSpacer_long_quiz_question_toolbar">
+               <property name="orientation">
+                <enum>Qt::Orientation::Horizontal</enum>
+               </property>
+               <property name="sizeHint" stdset="0">
+                <size>
+                 <width>40</width>
+                 <height>20</height>
+                </size>
+               </property>
+              </spacer>
+             </item>
+             <item>
+              <widget class="QLabel" name="long_quiz_question_status_label">
+               <property name="text">
+                <string>0 questions</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QPushButton" name="long_quiz_add_question_button">
+               <property name="text">
+                <string>Add Question</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QPushButton" name="long_quiz_edit_question_button">
+               <property name="text">
+                <string>Edit</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QPushButton" name="long_quiz_delete_question_button">
+               <property name="text">
+                <string>Delete</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </widget>
+          </item>
+          <item>
+           <widget class="QListWidget" name="long_quiz_question_list"/>
+          </item>
+         </layout>
+        </widget>
+        <widget class="QWidget" name="long_quiz_answer_panel">
+         <layout class="QVBoxLayout" name="verticalLayout_long_quiz_answer_panel">
+          <property name="leftMargin">
+           <number>8</number>
+          </property>
+          <property name="topMargin">
+           <number>0</number>
+          </property>
+          <property name="rightMargin">
+           <number>0</number>
+          </property>
+          <property name="bottomMargin">
+           <number>0</number>
+          </property>
+          <item>
+           <widget class="QLabel" name="long_quiz_answer_header_label">
+            <property name="text">
+             <string>Answer Board</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QWidget" name="long_quiz_review_toolbar">
+            <layout class="QHBoxLayout" name="horizontalLayout_long_quiz_review_toolbar">
+             <property name="leftMargin">
+              <number>0</number>
+             </property>
+             <property name="topMargin">
+              <number>0</number>
+             </property>
+             <property name="rightMargin">
+              <number>0</number>
+             </property>
+             <property name="bottomMargin">
+              <number>0</number>
+             </property>
+             <item>
+              <widget class="QLabel" name="long_quiz_score_label">
+               <property name="text">
+                <string/>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <spacer name="horizontalSpacer_long_quiz_review_toolbar">
+               <property name="orientation">
+                <enum>Qt::Orientation::Horizontal</enum>
+               </property>
+               <property name="sizeHint" stdset="0">
+                <size>
+                 <width>40</width>
+                 <height>20</height>
+                </size>
+               </property>
+              </spacer>
+             </item>
+             <item>
+              <widget class="QPushButton" name="long_quiz_submit_button">
+               <property name="text">
+                <string>Submit</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </widget>
+          </item>
+          <item>
+           <widget class="QScrollArea" name="long_quiz_answer_scroll">
+            <property name="widgetResizable">
+             <bool>true</bool>
+            </property>
+            <widget class="QWidget" name="long_quiz_answer_container">
+             <property name="geometry">
+              <rect>
+               <x>0</x>
+               <y>0</y>
+               <width>320</width>
+               <height>400</height>
+              </rect>
+             </property>
+             <layout class="QVBoxLayout" name="verticalLayout_long_quiz_answer_cards">
+              <property name="leftMargin">
+               <number>0</number>
+              </property>
+              <property name="topMargin">
+               <number>0</number>
+              </property>
+              <property name="rightMargin">
+               <number>0</number>
+              </property>
+              <property name="bottomMargin">
+               <number>0</number>
+              </property>
+             </layout>
+            </widget>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+         </widget>
+        </item>
+       </layout>
+        </widget>
+      </widget>
+     </widget>
+    </item>
+   </layout>
+  </widget>
+  <widget class="QMenuBar" name="menubar">
+   <property name="geometry">
+    <rect>
+     <x>0</x>
+     <y>0</y>
+     <width>918</width>
+     <height>22</height>
+    </rect>
+   </property>
+   <widget class="QMenu" name="menuFile">
+    <property name="title">
+     <string>File</string>
+    </property>
+    <addaction name="actionNew"/>
+    <addaction name="actionImport"/>
+   </widget>
+   <widget class="QMenu" name="menuView">
+    <property name="title">
+     <string>View</string>
+    </property>
+    <addaction name="actionPreference"/>
+   </widget>
+   <widget class="QMenu" name="menuTools">
+    <property name="title">
+     <string>Tools</string>
+    </property>
+   </widget>
+   <widget class="QMenu" name="menuHelp">
+    <property name="title">
+     <string>Help</string>
+    </property>
+   </widget>
+   <addaction name="menuFile"/>
+   <addaction name="menuView"/>
+   <addaction name="menuTools"/>
+   <addaction name="menuHelp"/>
+  </widget>
+  <widget class="QDockWidget" name="Subject">
+   <property name="floating">
+    <bool>true</bool>
+   </property>
+   <property name="windowTitle">
+    <string>Subject List</string>
+   </property>
+   <attribute name="dockWidgetArea">
+    <number>1</number>
+   </attribute>
+   <widget class="QWidget" name="Subjects">
+    <layout class="QGridLayout" name="gridLayout_2">
+     <item row="0" column="0">
+      <widget class="QWidget" name="subject_list" native="true"/>
+     </item>
+    </layout>
+   </widget>
+  </widget>
+  <action name="actionPreference">
+   <property name="text">
+    <string>Preference</string>
+   </property>
+  </action>
+  <action name="actionNew">
+   <property name="text">
+    <string>New</string>
+   </property>
+  </action>
+  <action name="actionImport">
+   <property name="text">
+    <string>Import</string>
+   </property>
+  </action>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

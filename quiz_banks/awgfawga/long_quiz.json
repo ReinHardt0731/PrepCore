@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "quiz_type": "long_quiz",
+  "subject": "awgfawga",
+  "selected_chapter": "",
+  "chapters": [],
+  "long_quiz_state": {
+    "selected_chapters": [],
+    "requested_question_count": 0,
+    "generated_question_refs": []
+  }
+}
