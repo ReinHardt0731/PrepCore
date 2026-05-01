@@ -40,38 +40,6 @@ A powerful desktop application designed to help students prepare effectively for
 - Pillow (image processing)
 - PyInstaller (for executable builds)
 
-## 📦 Installation
-
-### Option 1: Run from Source (Development)
-
-1. **Clone or download the repository**
-   ```bash
-   cd BOARDEXAMAPP
-   ```
-
-2. **Create a virtual environment** (recommended)
-   ```bash
-   python -m venv venv
-   venv\Scripts\activate
-   ```
-
-3. **Install dependencies**
-   ```bash
-   pip install -r requirements.txt
-   ```
-   
-   Or install manually:
-   ```bash
-   pip install PySide6 Pillow
-   ```
-
-4. **Run the application**
-   ```bash
-   python main.py
-   ```
-
-### Option 2: Use Pre-built Executable
-
 Download the latest `PrepCore.exe` from the releases section and run it directly. No Python installation required!
 
 ## 🚀 Quick Start
