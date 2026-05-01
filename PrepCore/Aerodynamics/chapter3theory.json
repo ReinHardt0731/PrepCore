@@ -1,0 +1,163 @@
+[
+  {
+    "question": "An airfoil is defined as:",
+    "choices": ["Wing structure only", "Shape designed to produce lift", "Engine component", "Tail section"],
+    "answer_index": 1,
+    "answer_text": "Shape designed to produce lift",
+    "explanation": "Airfoils are designed to generate lift efficiently.",
+    "tags": ["airfoil"]
+  },
+  {
+    "question": "The chord line is:",
+    "choices": ["Curved upper surface", "Straight line from leading to trailing edge", "Thickness line", "Camber line"],
+    "answer_index": 1,
+    "answer_text": "Straight line from leading to trailing edge",
+    "explanation": "Chord is the reference line of an airfoil.",
+    "tags": ["airfoil"]
+  },
+  {
+    "question": "Camber is defined as:",
+    "choices": ["Thickness of airfoil", "Curvature of mean line", "Wing span", "Angle of attack"],
+    "answer_index": 1,
+    "answer_text": "Curvature of mean line",
+    "explanation": "Camber describes how curved the airfoil is.",
+    "tags": ["airfoil"]
+  },
+  {
+    "question": "A symmetrical airfoil has:",
+    "choices": ["Maximum camber", "Zero camber", "High drag", "No lift"],
+    "answer_index": 1,
+    "answer_text": "Zero camber",
+    "explanation": "Upper and lower surfaces are identical.",
+    "tags": ["airfoil"]
+  },
+  {
+    "question": "At zero angle of attack, a cambered airfoil produces:",
+    "choices": ["No lift", "Negative lift", "Positive lift", "Maximum drag"],
+    "answer_index": 2,
+    "answer_text": "Positive lift",
+    "explanation": "Camber generates lift even at zero AoA.",
+    "tags": ["airfoil"]
+  },
+  {
+    "question": "The aerodynamic center is the point where:",
+    "choices": ["Lift is zero", "Drag is minimum", "Moment is constant", "Pressure is zero"],
+    "answer_index": 2,
+    "answer_text": "Moment is constant",
+    "explanation": "Moment coefficient does not change with AoA.",
+    "tags": ["airfoil"]
+  },
+  {
+    "question": "The aerodynamic center of a subsonic airfoil is located approximately at:",
+    "choices": ["Leading edge", "25% chord", "50% chord", "Trailing edge"],
+    "answer_index": 1,
+    "answer_text": "25% chord",
+    "explanation": "Typical location for subsonic flow.",
+    "tags": ["airfoil"]
+  },
+  {
+    "question": "Center of pressure is the point where:",
+    "choices": ["Lift acts", "Drag acts", "Weight acts", "Thrust acts"],
+    "answer_index": 0,
+    "answer_text": "Lift acts",
+    "explanation": "Resultant aerodynamic force location.",
+    "tags": ["airfoil"]
+  },
+  {
+    "question": "Unlike aerodynamic center, center of pressure:",
+    "choices": ["Is fixed", "Moves with AoA", "Is always at 25%", "Does not exist"],
+    "answer_index": 1,
+    "answer_text": "Moves with AoA",
+    "explanation": "Center of pressure shifts as angle changes.",
+    "tags": ["airfoil"]
+  },
+  {
+    "question": "Thickness ratio of an airfoil affects:",
+    "choices": ["Lift only", "Drag only", "Structural strength and drag", "Nothing"],
+    "answer_index": 2,
+    "answer_text": "Structural strength and drag",
+    "explanation": "Thickness impacts both strength and aerodynamic performance.",
+    "tags": ["airfoil"]
+  },
+
+  {
+    "question": "A high camber airfoil generally produces:",
+    "choices": ["Lower lift", "Higher lift", "Zero lift", "Higher drag only"],
+    "answer_index": 1,
+    "answer_text": "Higher lift",
+    "explanation": "Camber increases lift generation.",
+    "tags": ["airfoil"]
+  },
+  {
+    "question": "Streamlined bodies are designed to:",
+    "choices": ["Increase drag", "Reduce drag", "Increase lift", "Increase weight"],
+    "answer_index": 1,
+    "answer_text": "Reduce drag",
+    "explanation": "Shape minimizes flow separation.",
+    "tags": ["shape"]
+  },
+  {
+    "question": "Bluff bodies typically have:",
+    "choices": ["Low drag", "High pressure drag", "No drag", "Only induced drag"],
+    "answer_index": 1,
+    "answer_text": "High pressure drag",
+    "explanation": "Flow separation increases drag.",
+    "tags": ["shape"]
+  },
+  {
+    "question": "Drag polar is typically expressed as:",
+    "choices": ["CL vs V", "CD = CD0 + kCL²", "Lift vs drag", "Velocity vs area"],
+    "answer_index": 1,
+    "answer_text": "CD = CD0 + kCL²",
+    "explanation": "Standard drag polar equation.",
+    "tags": ["drag"]
+  },
+  {
+    "question": "CD0 represents:",
+    "choices": ["Induced drag", "Parasite drag", "Total drag", "Lift coefficient"],
+    "answer_index": 1,
+    "answer_text": "Parasite drag",
+    "explanation": "Zero-lift drag component.",
+    "tags": ["drag"]
+  },
+  {
+    "question": "The term k in drag polar is related to:",
+    "choices": ["Velocity", "Aspect ratio and efficiency", "Density", "Lift only"],
+    "answer_index": 1,
+    "answer_text": "Aspect ratio and efficiency",
+    "explanation": "k depends on AR and Oswald efficiency factor.",
+    "tags": ["drag"]
+  },
+  {
+    "question": "Increasing aspect ratio results in:",
+    "choices": ["Higher drag", "Lower induced drag", "Higher parasite drag", "No effect"],
+    "answer_index": 1,
+    "answer_text": "Lower induced drag",
+    "explanation": "Reduces vortex strength.",
+    "tags": ["wing"]
+  },
+  {
+    "question": "A flat plate compared to streamlined airfoil has:",
+    "choices": ["Less drag", "More drag", "Same drag", "No lift"],
+    "answer_index": 1,
+    "answer_text": "More drag",
+    "explanation": "Flat plates cause higher separation.",
+    "tags": ["shape"]
+  },
+  {
+    "question": "Airfoil efficiency improves when:",
+    "choices": ["Drag increases", "Lift increases relative to drag", "Velocity decreases", "Weight increases"],
+    "answer_index": 1,
+    "answer_text": "Lift increases relative to drag",
+    "explanation": "Higher L/D ratio.",
+    "tags": ["performance"]
+  },
+  {
+    "question": "Which shape minimizes pressure drag?",
+    "choices": ["Flat plate", "Sphere", "Streamlined body", "Cube"],
+    "answer_index": 2,
+    "answer_text": "Streamlined body",
+    "explanation": "Smooth flow reduces separation.",
+    "tags": ["shape"]
+  }
+]

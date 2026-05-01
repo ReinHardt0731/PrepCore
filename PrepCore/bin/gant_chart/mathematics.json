@@ -1,0 +1,28 @@
+{
+  "subject": "Mathematics",
+  "selected_date": "2026-04-03",
+  "tasks": [
+    {
+      "title": "Question Bank",
+      "start_date": "2026-04-30",
+      "end_date": "2026-04-30",
+      "notes": "",
+      "subject": "Mathematics",
+      "done": true
+    },
+    {
+      "title": "PrepCore Release",
+      "start_date": "2026-05-01",
+      "end_date": "2026-05-01",
+      "notes": "v0.1 Release would involve basic features for time management, Quizlet, Subject List outline and Notebook along with assesment tools.",
+      "subject": "Mathematics",
+      "done": true
+    }
+  ],
+  "todo_items": [],
+  "activities": [],
+  "selected_timer_mode": "short_quiz",
+  "custom_timer_seconds": 1800,
+  "gantt_task_column_width": 277,
+  "gantt_horizontal_scroll": 0
+}

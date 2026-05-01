@@ -1,0 +1,163 @@
+[
+  {
+    "question": "If the continuity equation is applicable, what happens to density when area changes?",
+    "choices": ["ρ1 < ρ2", "ρ1 > ρ2", "Depends on area", "ρ1 = ρ2"],
+    "answer_index": 3,
+    "answer_text": "ρ1 = ρ2",
+    "explanation": "For incompressible flow, density remains constant.",
+    "tags": ["continuity", "thermodynamics"]
+  },
+  {
+    "question": "What principle states conservation of mass in fluid flow?",
+    "choices": ["Bernoulli equation", "Continuity equation", "Energy equation", "Momentum equation"],
+    "answer_index": 1,
+    "answer_text": "Continuity equation",
+    "explanation": "Continuity equation ensures mass flow rate remains constant.",
+    "tags": ["continuity"]
+  },
+  {
+    "question": "Bernoulli’s equation relates:",
+    "choices": ["Pressure, velocity, elevation", "Mass and force", "Temperature and entropy", "Density and viscosity"],
+    "answer_index": 0,
+    "answer_text": "Pressure, velocity, elevation",
+    "explanation": "Bernoulli relates energy per unit volume in a flow.",
+    "tags": ["bernoulli"]
+  },
+  {
+    "question": "Total pressure is equal to:",
+    "choices": ["Static pressure only", "Dynamic pressure only", "Static + dynamic pressure", "Static - dynamic pressure"],
+    "answer_index": 2,
+    "answer_text": "Static + dynamic pressure",
+    "explanation": "Total pressure includes both static and dynamic components.",
+    "tags": ["pressure"]
+  },
+  {
+    "question": "Dynamic pressure is expressed as:",
+    "choices": ["ρV", "½ρV²", "ρ/V", "V²/ρ"],
+    "answer_index": 1,
+    "answer_text": "½ρV²",
+    "explanation": "Dynamic pressure represents kinetic energy per unit volume.",
+    "tags": ["pressure"]
+  },
+  {
+    "question": "Bernoulli equation for incompressible flow is:",
+    "choices": ["Pt = P + q", "Pt = P - q", "P = q - Pt", "q = P + Pt"],
+    "answer_index": 0,
+    "answer_text": "Pt = P + q",
+    "explanation": "Total pressure equals static plus dynamic pressure.",
+    "tags": ["bernoulli"]
+  },
+  {
+    "question": "What happens to velocity when cross-sectional area decreases?",
+    "choices": ["Decreases", "Increases", "Remains constant", "Becomes zero"],
+    "answer_index": 1,
+    "answer_text": "Increases",
+    "explanation": "From continuity equation, velocity increases when area decreases.",
+    "tags": ["continuity"]
+  },
+  {
+    "question": "A Venturi tube is primarily used to measure:",
+    "choices": ["Pressure only", "Temperature", "Flow rate", "Density"],
+    "answer_index": 2,
+    "answer_text": "Flow rate",
+    "explanation": "Venturi meters use pressure differences to determine flow rate.",
+    "tags": ["bernoulli"]
+  },
+  {
+    "question": "In a Venturi tube, pressure at the throat is:",
+    "choices": ["Higher", "Lower", "Same", "Zero"],
+    "answer_index": 1,
+    "answer_text": "Lower",
+    "explanation": "Higher velocity at the throat results in lower pressure.",
+    "tags": ["bernoulli"]
+  },
+  {
+    "question": "What happens to pressure when velocity increases?",
+    "choices": ["Increases", "Decreases", "Remains constant", "Becomes zero"],
+    "answer_index": 1,
+    "answer_text": "Decreases",
+    "explanation": "Bernoulli principle: higher velocity leads to lower pressure.",
+    "tags": ["bernoulli"]
+  },
+
+  {
+    "question": "What is conserved in steady incompressible flow?",
+    "choices": ["Energy only", "Mass only", "Mass and energy", "Momentum only"],
+    "answer_index": 2,
+    "answer_text": "Mass and energy",
+    "explanation": "Both continuity and Bernoulli apply.",
+    "tags": ["thermodynamics"]
+  },
+  {
+    "question": "Density is defined as:",
+    "choices": ["Mass/volume", "Force/area", "Energy/time", "Pressure/volume"],
+    "answer_index": 0,
+    "answer_text": "Mass/volume",
+    "explanation": "Basic definition of density.",
+    "tags": ["properties"]
+  },
+  {
+    "question": "Which parameter remains constant in incompressible flow?",
+    "choices": ["Velocity", "Pressure", "Density", "Temperature"],
+    "answer_index": 2,
+    "answer_text": "Density",
+    "explanation": "Incompressible flow assumes constant density.",
+    "tags": ["thermodynamics"]
+  },
+  {
+    "question": "A pitot tube measures:",
+    "choices": ["Static pressure", "Dynamic pressure", "Total pressure", "Temperature"],
+    "answer_index": 2,
+    "answer_text": "Total pressure",
+    "explanation": "Pitot tube captures stagnation pressure.",
+    "tags": ["pressure"]
+  },
+  {
+    "question": "Static pressure is measured:",
+    "choices": ["Facing flow", "Parallel to flow", "At stagnation point", "In vacuum"],
+    "answer_index": 1,
+    "answer_text": "Parallel to flow",
+    "explanation": "Static ports measure pressure unaffected by velocity.",
+    "tags": ["pressure"]
+  },
+  {
+    "question": "Energy equation in fluid flow includes:",
+    "choices": ["Kinetic only", "Potential only", "Pressure + kinetic + potential", "Temperature only"],
+    "answer_index": 2,
+    "answer_text": "Pressure + kinetic + potential",
+    "explanation": "Total energy per unit volume is conserved.",
+    "tags": ["energy"]
+  },
+  {
+    "question": "Which law explains pressure-velocity relationship?",
+    "choices": ["Newton’s law", "Bernoulli principle", "Ohm’s law", "Hooke’s law"],
+    "answer_index": 1,
+    "answer_text": "Bernoulli principle",
+    "explanation": "Relates velocity and pressure in fluid flow.",
+    "tags": ["bernoulli"]
+  },
+  {
+    "question": "Mass flow rate is defined as:",
+    "choices": ["ρAV", "ρ/V", "A/V", "V/ρ"],
+    "answer_index": 0,
+    "answer_text": "ρAV",
+    "explanation": "Mass flow rate equals density × area × velocity.",
+    "tags": ["continuity"]
+  },
+  {
+    "question": "If velocity doubles, dynamic pressure:",
+    "choices": ["Doubles", "Quadruples", "Halves", "Remains same"],
+    "answer_index": 1,
+    "answer_text": "Quadruples",
+    "explanation": "Dynamic pressure ∝ V².",
+    "tags": ["pressure"]
+  },
+  {
+    "question": "Flow is incompressible when:",
+    "choices": ["Density varies", "Density constant", "Pressure zero", "Velocity zero"],
+    "answer_index": 1,
+    "answer_text": "Density constant",
+    "explanation": "Key assumption for incompressible flow.",
+    "tags": ["thermodynamics"]
+  }
+]
