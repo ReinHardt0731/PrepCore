@@ -114,50 +114,6 @@ BOARDEXAMAPP/
     └── BUILD_README.md        # Build instructions
 ```
 
-## 🔨 Building the Executable
-
-### Quick Build (Recommended)
-
-```bash
-python build.py
-```
-
-Or on Windows:
-```bash
-build.bat
-```
-
-The executable will be created in the `dist/` folder as `PrepCore.exe`.
-
-### Manual Build with PyInstaller
-
-```bash
-pip install pyinstaller
-
-# Prepare assets
-python prepare_assets.py
-
-# Build the executable
-pyinstaller build.exe.spec
-```
-
-For detailed build instructions, see [BUILD_README.md](BUILD_README.md).
-
-## 📊 Data Storage
-
-All application data is stored in:
-- **Windows**: `C:\Users\{YourUsername}\AppData\Local\PrepCore\`
-- **Location**: User AppData directory (not in the application folder)
-
-This ensures data persists across application updates and reinstalls.
-
-### Data Files
-- `preferences.json` - User settings and preferences
-- `subjects.json` - Subject and chapter structure
-- `window_state.json` - Window size and position
-- Quiz banks: Stored in `quiz_banks/` (relative to app directory)
-- Notebooks: Stored in `notebooks/` (relative to app directory)
-
 ## 🎮 Usage Examples
 
 ### Create a New Subject
