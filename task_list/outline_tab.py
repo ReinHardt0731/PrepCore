@@ -1750,6 +1750,8 @@ class NotebookTabController(QObject):
 
         self.chapter_title_label = QLabel("Chapters", chapter_header_row)
         self.chapter_status_label = QLabel("0 chapters", chapter_header_row)
+        self.chapter_title_label.setStyleSheet("color: #7ab0ff; font-size: 10.5pt; font-weight: 700;")
+        self.chapter_status_label.setStyleSheet("color: #93a8c7; font-size: 10pt; font-weight: 500;")
         self.chapter_status_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         chapter_header_layout.addWidget(self.chapter_title_label)
         chapter_header_layout.addStretch(1)
@@ -2117,19 +2119,15 @@ class NotebookTabController(QObject):
         roots: dict[str, QTreeWidgetItem] = {}
         for chapter_path in self.chapter_titles:
             chapter_title, subchapter_title = self._split_leaf_path(chapter_path)
-            if subchapter_title is None:
-                item = QTreeWidgetItem([chapter_title])
-                item.setData(0, Qt.ItemDataRole.UserRole, chapter_path)
-                apply_font_to_item(item, TreeFontConfig.QUIZ_CHAPTER_SIZE)
-                self.chapter_list.addTopLevelItem(item)
-                continue
-
             parent_item = roots.get(chapter_title.lower())
             if parent_item is None:
                 parent_item = QTreeWidgetItem([chapter_title])
                 roots[chapter_title.lower()] = parent_item
                 apply_font_to_item(parent_item, TreeFontConfig.QUIZ_CHAPTER_SIZE)
                 self.chapter_list.addTopLevelItem(parent_item)
+            if subchapter_title is None:
+                parent_item.setData(0, Qt.ItemDataRole.UserRole, chapter_path)
+                continue
             child_item = QTreeWidgetItem([subchapter_title])
             child_item.setData(0, Qt.ItemDataRole.UserRole, chapter_path)
             apply_font_to_item(child_item, TreeFontConfig.QUIZ_SUBCHAPTER_SIZE)

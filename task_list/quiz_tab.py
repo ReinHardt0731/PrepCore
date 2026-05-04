@@ -7,9 +7,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from PySide6.QtCore import QObject, Qt
+from PySide6.QtCore import QObject, Qt, QUrl, QRectF
+from PySide6.QtGui import QColor, QDesktopServices, QIntValidator, QKeySequence, QPainter, QPen, QShortcut
 from PySide6.QtWidgets import (
     QSizePolicy,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -24,6 +26,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QPlainTextEdit,
+    QProgressBar,
     QRadioButton,
     QScrollArea,
     QSpinBox,
@@ -40,6 +43,63 @@ from tree_font_utils import apply_hierarchical_font_to_item, apply_font_to_item,
 
 class QuizFormatError(ValueError):
     pass
+
+
+QUESTION_TYPE_MULTIPLE_CHOICE = "multiple_choice"
+QUESTION_TYPE_NUMERIC = "numeric"
+
+
+def _normalize_question_type(value: Any) -> str:
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {QUESTION_TYPE_MULTIPLE_CHOICE, "mcq", "multiple choice"}:
+            return QUESTION_TYPE_MULTIPLE_CHOICE
+        if normalized in {QUESTION_TYPE_NUMERIC, "field", "numeric field", "integer"}:
+            return QUESTION_TYPE_NUMERIC
+    return QUESTION_TYPE_MULTIPLE_CHOICE
+
+
+def _parse_expected_answer(value: Any) -> float | None:
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        try:
+            return float(stripped)
+        except ValueError:
+            return None
+    return None
+
+
+def _format_expected_answer(value: float | None) -> str:
+    if value is None:
+        return ""
+    if float(value).is_integer():
+        return str(int(value))
+    return f"{value:g}"
+
+
+def _normalized_numeric_user_answer(raw_value: str | None) -> str | None:
+    if not isinstance(raw_value, str):
+        return None
+    stripped = raw_value.strip()
+    if not stripped:
+        return None
+    try:
+        return str(int(stripped))
+    except ValueError:
+        return None
+
+
+def _numeric_answer_matches(question: "QuizQuestion", raw_value: str | None) -> bool:
+    if question.expected_answer is None:
+        return False
+    normalized = _normalized_numeric_user_answer(raw_value)
+    if normalized is None:
+        return False
+    return abs(int(normalized) - question.expected_answer) <= max(0, question.accepted_deviation)
 
 
 def slugify(value: str) -> str:
@@ -94,15 +154,23 @@ class QuizQuestion:
     answer_text: str
     explanation: str = ""
     tags: list[str] = field(default_factory=list)
+    question_type: str = QUESTION_TYPE_MULTIPLE_CHOICE
+    expected_answer: float | None = None
+    accepted_deviation: int = 0
+    solution_file: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "question": self.question,
+            "question_type": self.question_type,
             "choices": self.choices,
             "answer_index": self.answer_index,
             "answer_text": self.answer_text,
             "explanation": self.explanation,
             "tags": self.tags,
+            "expected_answer": self.expected_answer,
+            "accepted_deviation": self.accepted_deviation,
+            "solution_file": self.solution_file,
         }
 
 
@@ -259,14 +327,73 @@ def _normalize_question_payload(entry: Any, position: int) -> QuizQuestion:
         raise QuizFormatError(f"Question {position} must be an object.")
 
     question = entry.get("question")
+    question_type = _normalize_question_type(
+        entry.get("question_type", QUESTION_TYPE_NUMERIC if "expected_answer" in entry else QUESTION_TYPE_MULTIPLE_CHOICE)
+    )
     choices = entry.get("choices")
     answer_index = entry.get("answer_index", entry.get("answer"))
     answer_text = entry.get("answer_text")
     explanation = entry.get("explanation", "")
     tags = entry.get("tags", [])
+    expected_answer = entry.get("expected_answer", entry.get("numeric_answer"))
+    accepted_deviation = entry.get("accepted_deviation", entry.get("deviation", 0))
+    solution_file = entry.get("solution_file", entry.get("solution_path", ""))
 
     if not isinstance(question, str) or not question.strip():
         raise QuizFormatError(f"Question {position} is missing a valid 'question' field.")
+
+    normalized_explanation = ""
+    if explanation is not None:
+        if not isinstance(explanation, str):
+            raise QuizFormatError(f"Question {position} explanation must be text if provided.")
+        normalized_explanation = explanation.strip()
+
+    normalized_tags: list[str] = []
+    if tags is not None:
+        if not isinstance(tags, list) or any(not isinstance(tag, str) for tag in tags):
+            raise QuizFormatError(f"Question {position} tags must be a list of strings.")
+        normalized_tags = [tag.strip() for tag in tags if tag.strip()]
+
+    normalized_solution_file = ""
+    if solution_file is not None:
+        if not isinstance(solution_file, str):
+            raise QuizFormatError(f"Question {position} solution file must be text if provided.")
+        normalized_solution_file = solution_file.strip()
+
+    if question_type == QUESTION_TYPE_NUMERIC:
+        parsed_expected_answer = _parse_expected_answer(expected_answer)
+        if parsed_expected_answer is None:
+            raise QuizFormatError(
+                f"Question {position} must include a valid numeric 'expected_answer'."
+            )
+        if not isinstance(accepted_deviation, int):
+            if isinstance(accepted_deviation, str) and accepted_deviation.strip().lstrip("-").isdigit():
+                accepted_deviation = int(accepted_deviation.strip())
+            else:
+                raise QuizFormatError(
+                    f"Question {position} accepted deviation must be an integer."
+                )
+        if int(accepted_deviation) < 0:
+            raise QuizFormatError(
+                f"Question {position} accepted deviation cannot be negative."
+            )
+        normalized_answer_text = (
+            answer_text.strip()
+            if isinstance(answer_text, str) and answer_text.strip()
+            else _format_expected_answer(parsed_expected_answer)
+        )
+        return QuizQuestion(
+            question=question.strip(),
+            choices=[],
+            answer_index=-1,
+            answer_text=normalized_answer_text,
+            explanation=normalized_explanation,
+            tags=normalized_tags,
+            question_type=QUESTION_TYPE_NUMERIC,
+            expected_answer=parsed_expected_answer,
+            accepted_deviation=int(accepted_deviation),
+            solution_file=normalized_solution_file,
+        )
 
     if not isinstance(choices, list) or len(choices) < 2:
         raise QuizFormatError(f"Question {position} must include at least two choices.")
@@ -306,18 +433,6 @@ def _normalize_question_payload(entry: Any, position: int) -> QuizQuestion:
         else normalized_choices[resolved_answer_index]
     )
 
-    normalized_explanation = ""
-    if explanation is not None:
-        if not isinstance(explanation, str):
-            raise QuizFormatError(f"Question {position} explanation must be text if provided.")
-        normalized_explanation = explanation.strip()
-
-    normalized_tags: list[str] = []
-    if tags is not None:
-        if not isinstance(tags, list) or any(not isinstance(tag, str) for tag in tags):
-            raise QuizFormatError(f"Question {position} tags must be a list of strings.")
-        normalized_tags = [tag.strip() for tag in tags if tag.strip()]
-
     return QuizQuestion(
         question=question.strip(),
         choices=normalized_choices,
@@ -325,6 +440,8 @@ def _normalize_question_payload(entry: Any, position: int) -> QuizQuestion:
         answer_text=normalized_answer_text,
         explanation=normalized_explanation,
         tags=normalized_tags,
+        question_type=QUESTION_TYPE_MULTIPLE_CHOICE,
+        solution_file=normalized_solution_file,
     )
 
 
@@ -429,12 +546,17 @@ class QuestionEditorDialog(QDialog):
     def __init__(self, parent: QWidget | None = None, question: QuizQuestion | None = None):
         super().__init__(parent)
         self.setWindowTitle("Question")
-        self.setMinimumWidth(520)
+        self.setMinimumWidth(620)
+        self.solution_file = question.solution_file if question is not None else ""
         self._build_ui(question)
 
     def _build_ui(self, question: QuizQuestion | None):
         layout = QVBoxLayout(self)
         form = QFormLayout()
+
+        self.type_combo = QComboBox(self)
+        self.type_combo.addItem("Multiple Choice", QUESTION_TYPE_MULTIPLE_CHOICE)
+        self.type_combo.addItem("Numeric Field", QUESTION_TYPE_NUMERIC)
 
         self.question_edit = QLineEdit(self)
         self.question_edit.setPlaceholderText("Enter the question text")
@@ -445,17 +567,42 @@ class QuestionEditorDialog(QDialog):
         self.answer_edit = QLineEdit(self)
         self.answer_edit.setPlaceholderText("Choice text or zero-based index")
 
+        self.expected_answer_edit = QLineEdit(self)
+        self.expected_answer_edit.setPlaceholderText("Enter the expected numeric answer")
+
+        self.accepted_deviation_spinbox = QSpinBox(self)
+        self.accepted_deviation_spinbox.setMinimum(0)
+        self.accepted_deviation_spinbox.setMaximum(999999)
+        self.accepted_deviation_spinbox.setPrefix("+/- ")
+
         self.explanation_edit = QPlainTextEdit(self)
         self.explanation_edit.setPlaceholderText("Optional explanation")
 
         self.tags_edit = QLineEdit(self)
         self.tags_edit.setPlaceholderText("Comma-separated tags")
 
+        solution_row = QWidget(self)
+        solution_layout = QHBoxLayout(solution_row)
+        solution_layout.setContentsMargins(0, 0, 0, 0)
+        solution_layout.setSpacing(6)
+        self.solution_file_edit = QLineEdit(solution_row)
+        self.solution_file_edit.setReadOnly(True)
+        self.solution_file_edit.setPlaceholderText("Optional solution file")
+        self.solution_browse_button = QPushButton("Browse", solution_row)
+        self.solution_clear_button = QPushButton("Clear", solution_row)
+        solution_layout.addWidget(self.solution_file_edit, 1)
+        solution_layout.addWidget(self.solution_browse_button)
+        solution_layout.addWidget(self.solution_clear_button)
+
+        form.addRow("Type", self.type_combo)
         form.addRow("Question", self.question_edit)
         form.addRow("Choices", self.choices_edit)
         form.addRow("Answer", self.answer_edit)
+        form.addRow("Expected Answer", self.expected_answer_edit)
+        form.addRow("Accepted Deviation", self.accepted_deviation_spinbox)
         form.addRow("Explanation", self.explanation_edit)
         form.addRow("Tags", self.tags_edit)
+        form.addRow("Solution File", solution_row)
         layout.addLayout(form)
 
         button_box = QDialogButtonBox(
@@ -465,17 +612,102 @@ class QuestionEditorDialog(QDialog):
         button_box.rejected.connect(self.reject)
         layout.addWidget(button_box)
 
+        self.type_combo.currentIndexChanged.connect(self._update_question_type_ui)
+        self.solution_browse_button.clicked.connect(self._choose_solution_file)
+        self.solution_clear_button.clicked.connect(self._clear_solution_file)
+
         if question is not None:
             self.question_edit.setText(question.question)
+            question_type_index = self.type_combo.findData(
+                _normalize_question_type(question.question_type)
+            )
+            if question_type_index >= 0:
+                self.type_combo.setCurrentIndex(question_type_index)
             self.choices_edit.setPlainText("\n".join(question.choices))
-            self.answer_edit.setText(str(question.answer_index))
+            if question.question_type == QUESTION_TYPE_NUMERIC:
+                self.expected_answer_edit.setText(_format_expected_answer(question.expected_answer))
+                self.accepted_deviation_spinbox.setValue(max(0, question.accepted_deviation))
+            else:
+                self.answer_edit.setText(str(question.answer_index))
             self.explanation_edit.setPlainText(question.explanation)
             self.tags_edit.setText(", ".join(question.tags))
+            self.solution_file_edit.setText(self.solution_file)
+        else:
+            self.type_combo.setCurrentIndex(0)
+
+        self._update_question_type_ui()
+
+    def _current_question_type(self) -> str:
+        return _normalize_question_type(self.type_combo.currentData())
+
+    def _update_question_type_ui(self):
+        is_numeric = self._current_question_type() == QUESTION_TYPE_NUMERIC
+        self.choices_edit.setVisible(not is_numeric)
+        self.answer_edit.setVisible(not is_numeric)
+        self.expected_answer_edit.setVisible(is_numeric)
+        self.accepted_deviation_spinbox.setVisible(is_numeric)
+        self.setLabelForFieldVisibility(is_numeric)
+
+    def setLabelForFieldVisibility(self, is_numeric: bool):
+        form_layout = self.layout().itemAt(0).layout()
+        if not isinstance(form_layout, QFormLayout):
+            return
+        for row in range(form_layout.rowCount()):
+            label_item = form_layout.itemAt(row, QFormLayout.ItemRole.LabelRole)
+            field_item = form_layout.itemAt(row, QFormLayout.ItemRole.FieldRole)
+            if label_item is None or field_item is None:
+                continue
+            label_widget = label_item.widget()
+            field_widget = field_item.widget()
+            if field_widget in {self.choices_edit, self.answer_edit}:
+                if label_widget is not None:
+                    label_widget.setVisible(not is_numeric)
+            elif field_widget in {self.expected_answer_edit, self.accepted_deviation_spinbox}:
+                if label_widget is not None:
+                    label_widget.setVisible(is_numeric)
+
+    def _choose_solution_file(self):
+        file_path, _selected_filter = QFileDialog.getOpenFileName(
+            self,
+            "Choose Solution File",
+            "",
+            "All Supported Files (*.pdf *.png *.jpg *.jpeg *.webp *.bmp *.txt *.md *.json);;All Files (*)",
+        )
+        if not file_path:
+            return
+        self.solution_file = file_path
+        self.solution_file_edit.setText(file_path)
+
+    def _clear_solution_file(self):
+        self.solution_file = ""
+        self.solution_file_edit.clear()
 
     def to_question(self) -> QuizQuestion:
         question_text = self.question_edit.text().strip()
         if not question_text:
             raise QuizFormatError("Please enter a question.")
+
+        question_type = self._current_question_type()
+        explanation = self.explanation_edit.toPlainText().strip()
+        tags = [tag.strip() for tag in self.tags_edit.text().split(",") if tag.strip()]
+
+        if question_type == QUESTION_TYPE_NUMERIC:
+            expected_answer = _parse_expected_answer(self.expected_answer_edit.text())
+            if expected_answer is None:
+                raise QuizFormatError("Please enter a valid numeric expected answer.")
+            accepted_deviation = self.accepted_deviation_spinbox.value()
+            return QuizQuestion(
+                question=question_text,
+                choices=[],
+                answer_index=-1,
+                answer_text=_format_expected_answer(expected_answer),
+                explanation=explanation,
+                tags=tags,
+                question_type=QUESTION_TYPE_NUMERIC,
+                expected_answer=expected_answer,
+                accepted_deviation=accepted_deviation,
+                solution_file=self.solution_file_edit.text().strip(),
+            )
 
         choices = [
             choice.strip()
@@ -497,9 +729,6 @@ class QuestionEditorDialog(QDialog):
                 "Answer must be a valid zero-based choice index or exactly match one choice."
             )
 
-        explanation = self.explanation_edit.toPlainText().strip()
-        tags = [tag.strip() for tag in self.tags_edit.text().split(",") if tag.strip()]
-
         return QuizQuestion(
             question=question_text,
             choices=choices,
@@ -507,6 +736,8 @@ class QuestionEditorDialog(QDialog):
             answer_text=choices[answer_index],
             explanation=explanation,
             tags=tags,
+            question_type=QUESTION_TYPE_MULTIPLE_CHOICE,
+            solution_file=self.solution_file_edit.text().strip(),
         )
 
 
@@ -544,23 +775,37 @@ class LongQuizSetupDialog(QDialog):
         roots: dict[str, QTreeWidgetItem] = {}
         for chapter in self._chapters:
             chapter_title, subchapter_title = split_leaf_path(chapter.title)
-            label = (
-                f"{subchapter_title} ({len(chapter.questions)} question{'s' if len(chapter.questions) != 1 else ''})"
-                if subchapter_title is not None
-                else f"{chapter_title} ({len(chapter.questions)} question{'s' if len(chapter.questions) != 1 else ''})"
-            )
-            item = QTreeWidgetItem([label])
-            item.setData(0, Qt.ItemDataRole.UserRole, chapter.title)
-            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            item.setCheckState(0, Qt.CheckState.Checked if chapter.title.lower() in selected_keys else Qt.CheckState.Unchecked)
-            if subchapter_title is None:
-                self.chapter_list.addTopLevelItem(item)
-                continue
             parent_item = roots.get(chapter_title.lower())
             if parent_item is None:
-                parent_item = QTreeWidgetItem([chapter_title])
+                aggregate_count = self._question_total_for_selection([chapter_title])
+                parent_item = QTreeWidgetItem(
+                    [
+                        f"{chapter_title} ({aggregate_count} question{'s' if aggregate_count != 1 else ''})"
+                    ]
+                )
+                parent_item.setData(0, Qt.ItemDataRole.UserRole, chapter_title)
+                parent_item.setFlags(parent_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                parent_item.setCheckState(
+                    0,
+                    Qt.CheckState.Checked
+                    if chapter_title.lower() in selected_keys
+                    else Qt.CheckState.Unchecked,
+                )
                 roots[chapter_title.lower()] = parent_item
                 self.chapter_list.addTopLevelItem(parent_item)
+            if subchapter_title is None:
+                continue
+            item = QTreeWidgetItem(
+                [f"{subchapter_title} ({len(chapter.questions)} question{'s' if len(chapter.questions) != 1 else ''})"]
+            )
+            item.setData(0, Qt.ItemDataRole.UserRole, chapter.title)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(
+                0,
+                Qt.CheckState.Checked
+                if chapter.title.lower() in selected_keys
+                else Qt.CheckState.Unchecked,
+            )
             parent_item.addChild(item)
             parent_item.setExpanded(True)
         self.chapter_list.itemChanged.connect(self._on_selection_changed)
@@ -602,10 +847,19 @@ class LongQuizSetupDialog(QDialog):
         return self.selected_chapter_titles(), self.question_count_spinbox.value()
 
     def _selected_question_total(self) -> int:
-        selected_keys = {title.lower() for title in self.selected_chapter_titles()}
+        return self._question_total_for_selection(self.selected_chapter_titles())
+
+    def _question_total_for_selection(self, selected_titles: list[str]) -> int:
+        selected_keys = {title.lower() for title in selected_titles}
+        expanded_keys: set[str] = set()
+        for chapter in self._chapters:
+            chapter_title, _subchapter_title = split_leaf_path(chapter.title)
+            if chapter.title.lower() in selected_keys or chapter_title.lower() in selected_keys:
+                expanded_keys.add(chapter.title.lower())
+
         total = 0
         for chapter in self._chapters:
-            if chapter.title.lower() in selected_keys:
+            if chapter.title.lower() in expanded_keys:
                 total += len(chapter.questions)
         return total
 
@@ -643,6 +897,60 @@ class LongQuizSetupDialog(QDialog):
         self._refresh_state()
 
 
+class PieChartWidget(QWidget):
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self._segments: list[tuple[str, int, QColor]] = []
+        self.setMinimumHeight(240)
+
+    def set_segments(self, segments: list[tuple[str, int, QColor]]):
+        self._segments = [(label, max(0, value), color) for label, value, color in segments]
+        self.update()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.fillRect(self.rect(), QColor("#0f1728"))
+
+        total = sum(value for _label, value, _color in self._segments)
+        if total <= 0:
+            painter.setPen(QColor("#9fb2cc"))
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "No flashcard results yet.")
+            return
+
+        margin = 18
+        diameter = min(self.width() - (margin * 2), self.height() - 96)
+        diameter = max(120, diameter)
+        pie_rect = QRectF(
+            margin,
+            margin,
+            diameter,
+            diameter,
+        )
+
+        start_angle = 90 * 16
+        for _label, value, color in self._segments:
+            if value <= 0:
+                continue
+            span_angle = -round((value / total) * 360 * 16)
+            painter.setBrush(color)
+            painter.setPen(QPen(QColor("#0f1728"), 2))
+            painter.drawPie(pie_rect, start_angle, span_angle)
+            start_angle += span_angle
+
+        legend_x = int(pie_rect.right()) + 20
+        legend_y = margin + 4
+        painter.setPen(QColor("#edf4ff"))
+        for label, value, color in self._segments:
+            painter.fillRect(legend_x, legend_y, 14, 14, color)
+            painter.drawText(
+                legend_x + 24,
+                legend_y + 12,
+                f"{label}: {value}",
+            )
+            legend_y += 24
+
 class QuestionCardWidget(QFrame):
     def __init__(
         self,
@@ -651,13 +959,18 @@ class QuestionCardWidget(QFrame):
         question: QuizQuestion,
         *,
         reveal_answers: bool = True,
+        flashcard_mode: bool = False,
     ):
         super().__init__()
         self.question = question
         self.question_number = question_number
         self.chapter_title = chapter_title
         self.selected_choice = -1
+        self.numeric_answer_input: QLineEdit | None = None
+        self.numeric_answer_checked = False
         self.reveal_answers = reveal_answers
+        self.flashcard_mode = flashcard_mode
+        self.choice_group: QButtonGroup | None = None
 
         self.setObjectName("quizQuestionCard")
         self.setFrameShape(QFrame.Shape.StyledPanel)
@@ -672,6 +985,9 @@ class QuestionCardWidget(QFrame):
             }
             """
         )
+        if self.flashcard_mode:
+            self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+            self.setMinimumHeight(420)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 14, 14, 14)
@@ -686,14 +1002,92 @@ class QuestionCardWidget(QFrame):
         question_label.setStyleSheet("color: #ffffff;")
         apply_font_to_widget(question_label, TreeFontConfig.QUESTION_TEXT_SIZE)
 
+        if self.flashcard_mode:
+            layout.addStretch(1)
+            chapter_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            chapter_label.setStyleSheet("color: #9fb2cc; font-size: 11pt; font-weight: 600;")
+            question_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            question_label.setStyleSheet("color: #ffffff; font-size: 18pt; font-weight: 700;")
+
         layout.addWidget(chapter_label)
         layout.addWidget(question_label)
 
+        if self.flashcard_mode:
+            self._build_flashcard_ui(layout)
+        elif self.question.question_type == QUESTION_TYPE_NUMERIC:
+            self._build_numeric_ui(layout)
+        else:
+            self._build_multiple_choice_ui(layout)
+
+        self.feedback_label = QLabel(self._default_feedback_text(), self)
+        self.feedback_label.setWordWrap(True)
+        self.feedback_label.setStyleSheet("color: #7e8ca8;")
+        if self.flashcard_mode:
+            self.feedback_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.feedback_label)
+
+        if self.question.solution_file:
+            self.solution_button = QPushButton("Open Solution", self)
+            self.solution_button.clicked.connect(self._open_solution_file)
+            if self.flashcard_mode:
+                self.solution_button.setMaximumWidth(220)
+            layout.addWidget(self.solution_button)
+        else:
+            self.solution_button = None
+        layout.addStretch(1)
+
+    def _build_flashcard_ui(self, layout: QVBoxLayout):
+        self.reveal_card_button = QPushButton("Reveal Answer", self)
+        self.reveal_card_button.setMaximumWidth(240)
+        self.reveal_card_button.setStyleSheet(
+            """
+            QPushButton {
+                background-color: #173158;
+                color: #ffffff;
+                border: 1px solid #2f74ff;
+                border-radius: 12px;
+                padding: 10px 18px;
+                font-weight: 700;
+            }
+            QPushButton:hover {
+                background-color: #1f4275;
+            }
+            """
+        )
+        self.reveal_card_button.clicked.connect(self._toggle_flashcard_answer)
+        layout.addWidget(self.reveal_card_button, 0, Qt.AlignmentFlag.AlignHCenter)
+
+        self.flashcard_answer_label = QLabel("", self)
+        self.flashcard_answer_label.setWordWrap(True)
+        self.flashcard_answer_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.flashcard_answer_label.setStyleSheet(
+            """
+            color: #f8fbff;
+            background-color: #173158;
+            border: 1px solid #2f74ff;
+            border-radius: 14px;
+            padding: 18px;
+            font-size: 15pt;
+            """
+        )
+        self.flashcard_answer_label.hide()
+        layout.addWidget(self.flashcard_answer_label)
+
+        self.flashcard_explanation_label = QLabel("", self)
+        self.flashcard_explanation_label.setWordWrap(True)
+        self.flashcard_explanation_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.flashcard_explanation_label.setStyleSheet(
+            "color: #c5d2e6; font-size: 11pt;"
+        )
+        self.flashcard_explanation_label.hide()
+        layout.addWidget(self.flashcard_explanation_label)
+
+    def _build_multiple_choice_ui(self, layout: QVBoxLayout):
         self.choice_group = QButtonGroup(self)
         self.choice_group.setExclusive(True)
         self.choice_group.buttonToggled.connect(self._on_choice_toggled)
 
-        for index, choice in enumerate(question.choices):
+        for index, choice in enumerate(self.question.choices):
             button = QRadioButton(choice, self)
             button.setProperty("choiceIndex", index)
             button.setStyleSheet("color: #ffffff;")
@@ -701,13 +1095,37 @@ class QuestionCardWidget(QFrame):
             self.choice_group.addButton(button, index)
             layout.addWidget(button)
 
-        self.feedback_label = QLabel("Select an answer", self)
-        self.feedback_label.setWordWrap(True)
+    def _build_numeric_ui(self, layout: QVBoxLayout):
+        numeric_row = QWidget(self)
+        numeric_layout = QHBoxLayout(numeric_row)
+        numeric_layout.setContentsMargins(0, 0, 0, 0)
+        numeric_layout.setSpacing(8)
+
+        self.numeric_answer_input = QLineEdit(numeric_row)
+        self.numeric_answer_input.setPlaceholderText("Enter an integer answer")
+        self.numeric_answer_input.setValidator(QIntValidator(-1_000_000_000, 1_000_000_000, self))
+        self.numeric_answer_input.textChanged.connect(self._on_numeric_answer_changed)
+        numeric_layout.addWidget(self.numeric_answer_input, 1)
+
+        if self.reveal_answers:
+            self.numeric_check_button = QPushButton("Check", numeric_row)
+            self.numeric_check_button.clicked.connect(self._check_numeric_answer)
+            numeric_layout.addWidget(self.numeric_check_button)
+        else:
+            self.numeric_check_button = None
+
+        layout.addWidget(numeric_row)
+
+    def _default_feedback_text(self) -> str:
+        if self.flashcard_mode:
+            return "Reveal the card to study the answer."
+        if self.question.question_type == QUESTION_TYPE_NUMERIC:
+            if self.reveal_answers:
+                return "Enter an integer answer, then click Check."
+            return "Enter an integer answer, then submit for a score."
         if not self.reveal_answers:
-            self.feedback_label.setText("Answer first, then submit for a score.")
-            self.feedback_label.setStyleSheet("color: #7e8ca8;")
-        layout.addWidget(self.feedback_label)
-        layout.addStretch(1)
+            return "Answer first, then submit for a score."
+        return "Select an answer"
 
     def _on_choice_toggled(self, button: QRadioButton, checked: bool):
         if not checked:
@@ -721,32 +1139,129 @@ class QuestionCardWidget(QFrame):
 
         if choice_index == self.question.answer_index:
             self.setProperty("cardState", "correct")
-            self.feedback_label.setText(f"Correct: {self.question.answer_text}")
+            self.feedback_label.setText(self._build_feedback_text(True))
             self.feedback_label.setStyleSheet("color: #8de2b1;")
         else:
             self.setProperty("cardState", "incorrect")
-            self.feedback_label.setText(f"Incorrect. Correct answer: {self.question.answer_text}")
+            self.feedback_label.setText(self._build_feedback_text(False))
             self.feedback_label.setStyleSheet("color: #ff9b9b;")
 
+    def _on_numeric_answer_changed(self, _text: str):
+        self.numeric_answer_checked = False
+        if not self.reveal_answers:
+            return
+        self.setProperty("cardState", "idle")
+        self.feedback_label.setText(self._default_feedback_text())
+        self.feedback_label.setStyleSheet("color: #7e8ca8;")
+
+    def _check_numeric_answer(self):
+        user_answer = self.user_answer_text()
+        self.numeric_answer_checked = True
+        if _numeric_answer_matches(self.question, user_answer):
+            self.setProperty("cardState", "correct")
+            self.feedback_label.setText(self._build_feedback_text(True))
+            self.feedback_label.setStyleSheet("color: #8de2b1;")
+        else:
+            self.setProperty("cardState", "incorrect")
+            self.feedback_label.setText(self._build_feedback_text(False, unanswered=user_answer is None))
+            self.feedback_label.setStyleSheet("color: #ff9b9b;")
+
+    def _toggle_flashcard_answer(self):
+        showing_answer = self.flashcard_answer_label.isVisible()
+        if showing_answer:
+            self.flashcard_answer_label.hide()
+            self.flashcard_explanation_label.hide()
+            self.reveal_card_button.setText("Reveal Answer")
+            self.feedback_label.setText(self._default_feedback_text())
+            self.feedback_label.setStyleSheet("color: #7e8ca8;")
+            return
+
+        self.flashcard_answer_label.setText(f"Answer: {self.question.answer_text}")
+        self.flashcard_answer_label.show()
+        if self.question.explanation:
+            self.flashcard_explanation_label.setText(f"Explanation: {self.question.explanation}")
+            self.flashcard_explanation_label.show()
+        else:
+            self.flashcard_explanation_label.hide()
+        self.reveal_card_button.setText("Hide Answer")
+        self.feedback_label.setText("Use this card for recall practice.")
+        self.feedback_label.setStyleSheet("color: #8de2b1;")
+
+    def user_answer_text(self) -> str | None:
+        if self.question.question_type == QUESTION_TYPE_NUMERIC:
+            if self.numeric_answer_input is None:
+                return None
+            return _normalized_numeric_user_answer(self.numeric_answer_input.text())
+        if self.selected_choice < 0 or self.selected_choice >= len(self.question.choices):
+            return None
+        return self.question.choices[self.selected_choice]
+
+    def has_response(self) -> bool:
+        if self.flashcard_mode:
+            return False
+        if self.question.question_type == QUESTION_TYPE_NUMERIC:
+            return self.user_answer_text() is not None
+        return self.selected_choice >= 0
+
+    def is_correct_response(self) -> bool:
+        if self.flashcard_mode:
+            return False
+        if self.question.question_type == QUESTION_TYPE_NUMERIC:
+            return _numeric_answer_matches(self.question, self.user_answer_text())
+        return self.selected_choice == self.question.answer_index
+
+    def _build_feedback_text(self, correct: bool, *, unanswered: bool = False) -> str:
+        if correct:
+            base_text = f"Correct: {self.question.answer_text}"
+        elif self.question.question_type == QUESTION_TYPE_NUMERIC:
+            base_text = (
+                f"{'Not answered' if unanswered else 'Incorrect'}. "
+                f"Accepted answer: {self.question.answer_text} (+/- {max(0, self.question.accepted_deviation)})"
+            )
+        else:
+            base_text = (
+                f"{'Not answered' if unanswered else 'Incorrect'}. "
+                f"Correct answer: {self.question.answer_text}"
+            )
+        if self.question.explanation:
+            return f"{base_text}\n\nExplanation: {self.question.explanation}"
+        return base_text
+
     def reveal_review(self, correct: bool):
-        for button in self.choice_group.buttons():
-            button.setEnabled(False)
+        if self.choice_group is not None:
+            for button in self.choice_group.buttons():
+                button.setEnabled(False)
+        if self.numeric_answer_input is not None:
+            self.numeric_answer_input.setEnabled(False)
+        if getattr(self, "numeric_check_button", None) is not None:
+            self.numeric_check_button.setEnabled(False)
+        if self.flashcard_mode:
+            return
 
         if correct:
             self.setProperty("cardState", "correct")
-            self.feedback_label.setText(f"Correct: {self.question.answer_text}")
+            self.feedback_label.setText(self._build_feedback_text(True))
             self.feedback_label.setStyleSheet("color: #8de2b1;")
         else:
             self.setProperty("cardState", "incorrect")
-            if self.selected_choice < 0:
-                self.feedback_label.setText(
-                    f"Not answered. Correct answer: {self.question.answer_text}"
-                )
-            else:
-                self.feedback_label.setText(
-                    f"Incorrect. Correct answer: {self.question.answer_text}"
-                )
+            self.feedback_label.setText(
+                self._build_feedback_text(False, unanswered=not self.has_response())
+            )
             self.feedback_label.setStyleSheet("color: #ff9b9b;")
+
+    def _open_solution_file(self):
+        solution_path = self.question.solution_file.strip()
+        if not solution_path:
+            QMessageBox.information(self, "No Solution", "This question has no uploaded solution file.")
+            return
+
+        path = Path(solution_path)
+        if not path.exists():
+            QMessageBox.warning(self, "Missing Solution", f"Could not find solution file:\n{solution_path}")
+            return
+
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(path.resolve()))):
+            QMessageBox.warning(self, "Open Failed", f"Could not open solution file:\n{solution_path}")
 
 
 class ChapterQuizTabController(QObject):
@@ -777,6 +1292,17 @@ class ChapterQuizTabController(QObject):
         self.quiz_start_time: datetime | None = None
         self.assessment_tab_controller: Any = None
         self.sister_controller: Any = None  # Reference to the other quiz type (short <-> long)
+        self.flashcard_mode_enabled = False
+        self.flashcard_session_chapter: str | None = None
+        self.flashcard_queue_keys: list[str] = []
+        self.flashcard_mastered_keys: set[str] = set()
+        self.flashcard_review_needed_keys: set[str] = set()
+        self.flashcard_last_review_needed_keys: set[str] = set()
+        self.flashcard_total_cards = 0
+        self.flashcard_review_only_mode = False
+        self.flashcard_assessment_ready = False
+        self.flashcard_mastered_shortcut: QShortcut | None = None
+        self.flashcard_review_shortcut: QShortcut | None = None
 
         self._build_ui()
         self._wire_signals()
@@ -848,6 +1374,7 @@ class ChapterQuizTabController(QObject):
         self.chapter_list.setAlternatingRowColors(True)
         self.question_list.setAlternatingRowColors(True)
         self.add_chapter_button.hide()
+        self._apply_header_theme()
 
         answer_panel_layout = self.answer_header_label.parentWidget().layout()
         answer_panel_layout.removeWidget(self.answer_header_label)
@@ -859,9 +1386,45 @@ class ChapterQuizTabController(QObject):
         header_toolbar_layout.addWidget(self.answer_header_label, 1)
 
         self.branch_toggle_button: QToolButton | None = None
+        self.flashcard_toggle_button: QToolButton | None = None
         self.branch_viewer: QWidget | None = None
         self.branch_tree: QTreeWidget | None = None
-        if self.show_branch_viewer:
+        if self.prefix == "short_quiz":
+            self.flashcard_toggle_button = QToolButton(self.answer_header_toolbar)
+            self.flashcard_toggle_button.setText("Flashcards")
+            self.flashcard_toggle_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+            self.flashcard_toggle_button.setCheckable(True)
+            self.flashcard_toggle_button.setChecked(self.flashcard_mode_enabled)
+            self.flashcard_toggle_button.setStyleSheet(
+                """
+                QToolButton {
+                    background-color: #132136;
+                    color: #edf4ff;
+                    border: 1px solid #23314a;
+                    border-radius: 10px;
+                    padding: 6px 12px;
+                    font-weight: 600;
+                }
+                QToolButton:hover {
+                    background-color: #173158;
+                    border-color: #2f74ff;
+                }
+                QToolButton:checked {
+                    background-color: #173158;
+                    border-color: #2f74ff;
+                }
+                """
+            )
+            header_toolbar_layout.addWidget(self.flashcard_toggle_button)
+            self.flashcard_mastered_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Left), self.page)
+            self.flashcard_review_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Right), self.page)
+            self.flashcard_mastered_shortcut.activated.connect(
+                lambda: self._handle_flashcard_shortcut(mastered=True)
+            )
+            self.flashcard_review_shortcut.activated.connect(
+                lambda: self._handle_flashcard_shortcut(mastered=False)
+            )
+        if self.show_branch_viewer and not self._is_long_quiz():
             self.branch_toggle_button = QToolButton(self.answer_header_toolbar)
             self.branch_toggle_button.setText("Options")
             self.branch_toggle_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
@@ -891,7 +1454,7 @@ class ChapterQuizTabController(QObject):
 
         answer_panel_layout.insertWidget(0, self.answer_header_toolbar)
 
-        if self.show_branch_viewer:
+        if self.show_branch_viewer and not self._is_long_quiz():
             self.branch_viewer = QWidget(self.answer_header_label.parentWidget())
             self.branch_viewer.setSizePolicy(
                 QSizePolicy.Policy.Preferred,
@@ -936,14 +1499,20 @@ class ChapterQuizTabController(QObject):
             answer_panel_layout.insertWidget(1, self.branch_viewer)
 
         self.long_quiz_setup_toolbar: QWidget | None = None
-        self.long_quiz_summary_label: QLabel | None = None
-        self.long_quiz_choose_chapters_button: QPushButton | None = None
-        self.long_quiz_question_count_spinbox: QSpinBox | None = None
+        self.long_quiz_options_button: QPushButton | None = None
         self.long_quiz_generate_button: QPushButton | None = None
         if self._is_long_quiz():
             self._build_long_quiz_setup_ui(answer_panel_layout)
 
         self._update_branch_toggle()
+
+    def _apply_header_theme(self):
+        self.title_label.setStyleSheet("color: #f8fbff; font-size: 16pt; font-weight: 700;")
+        self.status_label.setStyleSheet("color: #93a8c7; font-size: 10pt; font-weight: 500;")
+        self.chapter_header_label.setStyleSheet("color: #7ab0ff; font-size: 10.5pt; font-weight: 700;")
+        self.question_header_label.setStyleSheet("color: #7ab0ff; font-size: 10.5pt; font-weight: 700;")
+        self.question_status_label.setStyleSheet("color: #93a8c7; font-size: 10pt; font-weight: 500;")
+        self.answer_header_label.setStyleSheet("color: #edf4ff; font-size: 12pt; font-weight: 700;")
 
     def _build_long_quiz_setup_ui(self, answer_panel_layout):
         review_toolbar = self.submit_button.parentWidget() if self.submit_button is not None else None
@@ -956,24 +1525,14 @@ class ChapterQuizTabController(QObject):
         setup_layout.setContentsMargins(0, 0, 0, 0)
         setup_layout.setSpacing(8)
 
-        self.long_quiz_choose_chapters_button = QPushButton("Choose Chapters", self.long_quiz_setup_toolbar)
-        self.long_quiz_question_count_spinbox = QSpinBox(self.long_quiz_setup_toolbar)
-        self.long_quiz_question_count_spinbox.setMinimum(0)
-        self.long_quiz_question_count_spinbox.setMaximum(0)
-        self.long_quiz_question_count_spinbox.setPrefix("Questions: ")
+        self.long_quiz_options_button = QPushButton("Quiz Options", self.long_quiz_setup_toolbar)
         self.long_quiz_generate_button = QPushButton("Generate Test", self.long_quiz_setup_toolbar)
 
-        setup_layout.addWidget(self.long_quiz_choose_chapters_button)
-        setup_layout.addWidget(self.long_quiz_question_count_spinbox)
+        setup_layout.addWidget(self.long_quiz_options_button)
         setup_layout.addStretch(1)
         setup_layout.addWidget(self.long_quiz_generate_button)
 
-        self.long_quiz_summary_label = QLabel(self.answer_header_label.parentWidget())
-        self.long_quiz_summary_label.setWordWrap(True)
-        self.long_quiz_summary_label.setStyleSheet("color: #9fb2cc;")
-
         answer_panel_layout.insertWidget(insert_index, self.long_quiz_setup_toolbar)
-        answer_panel_layout.insertWidget(insert_index + 1, self.long_quiz_summary_label)
 
     def _wire_signals(self):
         self.chapter_list.itemSelectionChanged.connect(self._on_chapter_changed)
@@ -984,16 +1543,16 @@ class ChapterQuizTabController(QObject):
         self.add_question_button.clicked.connect(self.add_question)
         self.edit_question_button.clicked.connect(self.edit_question)
         self.delete_question_button.clicked.connect(self.delete_question)
+        if self.flashcard_toggle_button is not None:
+            self.flashcard_toggle_button.toggled.connect(self._on_flashcard_mode_toggled)
         if self.branch_toggle_button is not None:
             self.branch_toggle_button.toggled.connect(self._on_branch_toggle_toggled)
         if self.branch_tree is not None:
             self.branch_tree.itemSelectionChanged.connect(self._on_branch_tree_selection_changed)
         if self.submit_button is not None:
             self.submit_button.clicked.connect(self.submit_long_quiz)
-        if self.long_quiz_choose_chapters_button is not None:
-            self.long_quiz_choose_chapters_button.clicked.connect(self.open_long_quiz_setup_dialog)
-        if self.long_quiz_question_count_spinbox is not None:
-            self.long_quiz_question_count_spinbox.valueChanged.connect(self._on_long_quiz_count_changed)
+        if self.long_quiz_options_button is not None:
+            self.long_quiz_options_button.clicked.connect(self.open_long_quiz_setup_dialog)
         if self.long_quiz_generate_button is not None:
             self.long_quiz_generate_button.clicked.connect(self.generate_long_quiz)
 
@@ -1010,6 +1569,7 @@ class ChapterQuizTabController(QObject):
             self.bank = QuizBank(quiz_type=self.prefix)
             self.storage_path = None
             self.review_submitted = False
+            self._reset_flashcard_session()
             self._reset_long_quiz_state()
             self._refresh_ui()
             return
@@ -1196,6 +1756,187 @@ class ChapterQuizTabController(QObject):
     def _is_long_quiz(self) -> bool:
         return self.prefix == "long_quiz"
 
+    def _question_flashcard_key(self, chapter_title: str, question: QuizQuestion) -> str:
+        return f"{chapter_title.strip().lower()}::{question.question.strip().lower()}"
+
+    def _reset_flashcard_session(self):
+        self.flashcard_session_chapter = None
+        self.flashcard_queue_keys = []
+        self.flashcard_mastered_keys = set()
+        self.flashcard_review_needed_keys = set()
+        self.flashcard_total_cards = 0
+        self.flashcard_review_only_mode = False
+        self.flashcard_assessment_ready = False
+
+    def _flashcard_questions_for_session(
+        self,
+        chapter: QuizChapter,
+        *,
+        review_only: bool = False,
+    ) -> list[tuple[str, QuizQuestion]]:
+        if not review_only:
+            return [(self._question_flashcard_key(chapter.title, question), question) for question in chapter.questions]
+        return [
+            (self._question_flashcard_key(chapter.title, question), question)
+            for question in chapter.questions
+            if self._question_flashcard_key(chapter.title, question) in self.flashcard_last_review_needed_keys
+        ]
+
+    def _start_flashcard_session(
+        self,
+        chapter: QuizChapter,
+        *,
+        review_only: bool = False,
+    ):
+        deck = self._flashcard_questions_for_session(chapter, review_only=review_only)
+        self.flashcard_session_chapter = chapter.title
+        self.flashcard_queue_keys = [key for key, _question in deck]
+        self.flashcard_mastered_keys = set()
+        self.flashcard_review_needed_keys = set()
+        self.flashcard_total_cards = len(deck)
+        self.flashcard_review_only_mode = review_only
+        self.flashcard_assessment_ready = False
+
+    def _ensure_flashcard_session(self, chapter: QuizChapter):
+        if (
+            self.flashcard_session_chapter != chapter.title
+            or self.flashcard_total_cards <= 0
+            or (
+                self.flashcard_review_only_mode
+                and not any(
+                    self._question_flashcard_key(chapter.title, question) in self.flashcard_last_review_needed_keys
+                    for question in chapter.questions
+                )
+            )
+        ):
+            self._start_flashcard_session(chapter, review_only=False)
+
+    def _find_flashcard_question(
+        self,
+        chapter: QuizChapter,
+        question_key: str,
+    ) -> QuizQuestion | None:
+        for question in chapter.questions:
+            if self._question_flashcard_key(chapter.title, question) == question_key:
+                return question
+        return None
+
+    def _current_flashcard_key(self) -> str | None:
+        if not self.flashcard_queue_keys:
+            return None
+        return self.flashcard_queue_keys[0]
+
+    def _current_flashcard_question(self, chapter: QuizChapter) -> QuizQuestion | None:
+        question_key = self._current_flashcard_key()
+        if question_key is None:
+            return None
+        return self._find_flashcard_question(chapter, question_key)
+
+    def _flashcard_progress_text(self) -> str:
+        total = max(0, self.flashcard_total_cards)
+        mastered = len(self.flashcard_mastered_keys)
+        remaining = len(self.flashcard_queue_keys)
+        review_count = len(self.flashcard_review_needed_keys)
+        if total <= 0:
+            return "No cards in this flashcard deck yet."
+        mode_label = "Review deck" if self.flashcard_review_only_mode else "Learn deck"
+        current_number = min(total, mastered + 1) if remaining else total
+        return (
+            f"{mode_label} | Card {current_number}/{total} | "
+            f"Mastered: {mastered} | Study again: {review_count} | Remaining: {remaining}"
+        )
+
+    def _flashcard_progress_value(self) -> tuple[int, int]:
+        total = max(0, self.flashcard_total_cards)
+        if total <= 0:
+            return 0, 1
+        if self.flashcard_assessment_ready:
+            return total, total
+        current_step = total - len(self.flashcard_queue_keys) + 1
+        return max(1, min(current_step, total)), total
+
+    def _sync_flashcard_question_selection(self, chapter: QuizChapter):
+        current_key = self._current_flashcard_key()
+        if current_key is None:
+            return
+        for row, question in enumerate(chapter.questions):
+            if self._question_flashcard_key(chapter.title, question) == current_key:
+                self.question_list.blockSignals(True)
+                self.question_list.setCurrentRow(row)
+                self.question_list.blockSignals(False)
+                return
+
+    def _jump_flashcard_to_question(self, chapter: QuizChapter, row: int):
+        if row < 0 or row >= len(chapter.questions):
+            return
+        target_key = self._question_flashcard_key(chapter.title, chapter.questions[row])
+        if target_key not in self.flashcard_queue_keys:
+            return
+        while self.flashcard_queue_keys and self.flashcard_queue_keys[0] != target_key:
+            self.flashcard_queue_keys.append(self.flashcard_queue_keys.pop(0))
+
+    def _advance_flashcard(self, chapter: QuizChapter, *, mastered: bool):
+        current_key = self._current_flashcard_key()
+        if current_key is None:
+            return
+
+        self.flashcard_queue_keys.pop(0)
+        if mastered:
+            self.flashcard_mastered_keys.add(current_key)
+        else:
+            self.flashcard_review_needed_keys.add(current_key)
+            self.flashcard_queue_keys.append(current_key)
+
+        if not self.flashcard_queue_keys:
+            self.flashcard_assessment_ready = True
+            self.flashcard_last_review_needed_keys = set(self.flashcard_review_needed_keys)
+
+        self._refresh_answer_cards()
+        if not self.flashcard_assessment_ready:
+            self._sync_flashcard_question_selection(chapter)
+
+    def _handle_flashcard_shortcut(self, *, mastered: bool):
+        if not self.flashcard_mode_enabled or self._is_long_quiz():
+            return
+        chapter = self._selected_chapter()
+        if chapter is None:
+            return
+        self._ensure_flashcard_session(chapter)
+        if self.flashcard_assessment_ready:
+            return
+        self._advance_flashcard(chapter, mastered=mastered)
+
+    def _start_flashcard_review_deck(self):
+        chapter = self._selected_chapter()
+        if chapter is None:
+            return
+        if not self.flashcard_last_review_needed_keys:
+            QMessageBox.information(
+                self.page,
+                "Nothing To Review",
+                "There are no flashcards marked for more study yet.",
+            )
+            return
+        self._start_flashcard_session(chapter, review_only=True)
+        self._refresh_answer_cards()
+        self._sync_flashcard_question_selection(chapter)
+
+    def _restart_flashcard_learn_mode(self):
+        chapter = self._selected_chapter()
+        if chapter is None:
+            return
+        self._start_flashcard_session(chapter, review_only=False)
+        self._refresh_answer_cards()
+        self._sync_flashcard_question_selection(chapter)
+
+    def _switch_to_quiz_mode(self):
+        self.flashcard_mode_enabled = False
+        if self.flashcard_toggle_button is not None:
+            self.flashcard_toggle_button.blockSignals(True)
+            self.flashcard_toggle_button.setChecked(False)
+            self.flashcard_toggle_button.blockSignals(False)
+        self._refresh_answer_cards()
+
     def _update_branch_toggle(self):
         if (
             not self.show_branch_viewer
@@ -1227,18 +1968,10 @@ class ChapterQuizTabController(QObject):
 
             for chapter in self.bank.chapters:
                 chapter_title, subchapter_title = split_leaf_path(chapter.title)
-                if subchapter_title is None:
-                    child = QTreeWidgetItem([chapter_title])
-                    child.setData(0, BRANCH_ITEM_KIND_ROLE, "chapter")
-                    child.setData(0, BRANCH_CHAPTER_TITLE_ROLE, chapter.title)
-                    apply_font_to_item(child, TreeFontConfig.QUIZ_CHAPTER_SIZE)
-                    root.addChild(child)
-                    continue
-
                 parent_item = None
                 for index in range(root.childCount()):
                     existing = root.child(index)
-                    if existing.text(0).lower() == chapter_title.lower() and existing.data(0, BRANCH_ITEM_KIND_ROLE) == "group":
+                    if existing.text(0).lower() == chapter_title.lower():
                         parent_item = existing
                         break
                 if parent_item is None:
@@ -1246,6 +1979,10 @@ class ChapterQuizTabController(QObject):
                     parent_item.setData(0, BRANCH_ITEM_KIND_ROLE, "group")
                     apply_font_to_item(parent_item, TreeFontConfig.QUIZ_CHAPTER_SIZE)
                     root.addChild(parent_item)
+                if subchapter_title is None:
+                    parent_item.setData(0, BRANCH_ITEM_KIND_ROLE, "chapter")
+                    parent_item.setData(0, BRANCH_CHAPTER_TITLE_ROLE, chapter.title)
+                    continue
                 child = QTreeWidgetItem([subchapter_title])
                 child.setData(0, BRANCH_ITEM_KIND_ROLE, "chapter")
                 child.setData(0, BRANCH_CHAPTER_TITLE_ROLE, chapter.title)
@@ -1312,7 +2049,7 @@ class ChapterQuizTabController(QObject):
                 self.answer_header_label.setText("Generated Test")
                 empty_text = "Add a chapter from the subject tree, then import or write questions here."
             else:
-                self.answer_header_label.setText("Answer Board")
+                self.answer_header_label.setText("Flashcards" if self.flashcard_mode_enabled else "Answer Board")
                 empty_text = "Add a chapter from the subject tree, then import or write questions here."
             empty_label = QLabel(empty_text, self.answer_container)
             empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -1330,6 +2067,7 @@ class ChapterQuizTabController(QObject):
         self.status_label.setText(f"{chapter_count} chapters loaded")
         self.question_status_label.setText(f"{question_count} questions")
         self.title_label.setText(self.title)
+        self.chapter_header_label.setText(self.subject_name or "Chapters")
 
     def _reset_review_state(self):
         self.review_submitted = False
@@ -1364,19 +2102,15 @@ class ChapterQuizTabController(QObject):
         roots: dict[str, QTreeWidgetItem] = {}
         for chapter in self.bank.chapters:
             chapter_title, subchapter_title = split_leaf_path(chapter.title)
-            if subchapter_title is None:
-                item = QTreeWidgetItem([chapter_title])
-                item.setData(0, TREE_LEAF_PATH_ROLE, chapter.title)
-                apply_font_to_item(item, TreeFontConfig.QUIZ_CHAPTER_SIZE)
-                self.chapter_list.addTopLevelItem(item)
-                continue
-
             parent_item = roots.get(chapter_title.lower())
             if parent_item is None:
                 parent_item = QTreeWidgetItem([chapter_title])
                 roots[chapter_title.lower()] = parent_item
                 apply_font_to_item(parent_item, TreeFontConfig.QUIZ_CHAPTER_SIZE)
                 self.chapter_list.addTopLevelItem(parent_item)
+            if subchapter_title is None:
+                parent_item.setData(0, TREE_LEAF_PATH_ROLE, chapter.title)
+                continue
             child_item = QTreeWidgetItem([subchapter_title])
             child_item.setData(0, TREE_LEAF_PATH_ROLE, chapter.title)
             apply_font_to_item(child_item, TreeFontConfig.QUIZ_SUBCHAPTER_SIZE)
@@ -1405,7 +2139,8 @@ class ChapterQuizTabController(QObject):
             return
 
         for index, question in enumerate(chapter.questions, start=1):
-            item = QListWidgetItem(f"{index}. {question.question}")
+            type_marker = "[Field]" if question.question_type == QUESTION_TYPE_NUMERIC else "[MCQ]"
+            item = QListWidgetItem(f"{index}. {type_marker} {question.question}")
             self.question_list.addItem(item)
 
         self.question_list.blockSignals(False)
@@ -1415,7 +2150,8 @@ class ChapterQuizTabController(QObject):
         if chapter.questions:
             self.question_list.setCurrentRow(0)
         elif not self._is_long_quiz():
-            self.answer_header_label.setText(f"Answer Board - {chapter.title}")
+            header_title = "Flashcards" if self.flashcard_mode_enabled else "Answer Board"
+            self.answer_header_label.setText(f"{header_title} - {chapter.title}")
             self._clear_layout(self.answer_cards_layout)
             empty_label = QLabel(
                 f"{chapter.title}\n\nAdd a question to begin this chapter.",
@@ -1435,10 +2171,11 @@ class ChapterQuizTabController(QObject):
         self.answer_cards = []
 
         if chapter is None:
-            self.answer_header_label.setText("Answer Board")
+            self.answer_header_label.setText("Flashcards" if self.flashcard_mode_enabled else "Answer Board")
             return
 
-        self.answer_header_label.setText(f"Answer Board - {chapter.title}")
+        header_title = "Flashcards" if self.flashcard_mode_enabled else "Answer Board"
+        self.answer_header_label.setText(f"{header_title} - {chapter.title}")
 
         if not chapter.questions:
             empty_label = QLabel(
@@ -1450,16 +2187,155 @@ class ChapterQuizTabController(QObject):
             self.answer_cards_layout.addWidget(empty_label)
             return
 
+        if self.flashcard_mode_enabled:
+            self._ensure_flashcard_session(chapter)
+            if self.flashcard_assessment_ready:
+                self._render_flashcard_assessment_view(chapter)
+                return
+
+            current_question = self._current_flashcard_question(chapter)
+            if current_question is None:
+                self._start_flashcard_session(chapter, review_only=False)
+                current_question = self._current_flashcard_question(chapter)
+                if current_question is None:
+                    return
+
+            progress_value, progress_total = self._flashcard_progress_value()
+            progress_bar = QProgressBar(self.answer_container)
+            progress_bar.setRange(0, progress_total)
+            progress_bar.setValue(progress_value)
+            progress_bar.setTextVisible(True)
+            progress_bar.setFormat(f"Card {progress_value}/{progress_total}")
+            progress_bar.setStyleSheet(
+                """
+                QProgressBar {
+                    background-color: #0f1728;
+                    color: #edf4ff;
+                    border: 1px solid #22314b;
+                    border-radius: 10px;
+                    text-align: center;
+                    min-height: 22px;
+                    font-weight: 700;
+                }
+                QProgressBar::chunk {
+                    background-color: #2f74ff;
+                    border-radius: 9px;
+                }
+                """
+            )
+            self.answer_cards_layout.addWidget(progress_bar)
+
+            progress_label = QLabel(self._flashcard_progress_text(), self.answer_container)
+            progress_label.setWordWrap(True)
+            progress_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            progress_label.setStyleSheet("color: #9fb2cc;")
+            self.answer_cards_layout.addWidget(progress_label)
+
+            current_card = QuestionCardWidget(
+                chapter.title,
+                min(self.flashcard_total_cards, len(self.flashcard_mastered_keys) + 1),
+                current_question,
+                reveal_answers=True,
+                flashcard_mode=True,
+            )
+            current_card.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+            self.answer_cards.append(current_card)
+            self.answer_cards_layout.addWidget(current_card)
+            self.answer_cards_layout.setStretchFactor(current_card, 1)
+
+            action_row = QWidget(self.answer_container)
+            action_layout = QHBoxLayout(action_row)
+            action_layout.setContentsMargins(0, 0, 0, 0)
+            action_layout.setSpacing(8)
+
+            mastered_button = QPushButton("Swipe Left: Mastered", action_row)
+            review_button = QPushButton("Swipe Right: Study Again", action_row)
+            mastered_button.clicked.connect(lambda: self._advance_flashcard(chapter, mastered=True))
+            review_button.clicked.connect(lambda: self._advance_flashcard(chapter, mastered=False))
+            action_layout.addWidget(mastered_button)
+            action_layout.addWidget(review_button)
+            self.answer_cards_layout.addWidget(action_row)
+
+            helper_label = QLabel(
+                "Focus on one card at a time. Reveal the answer, then mark it mastered or send it back for more study.",
+                self.answer_container,
+            )
+            helper_label.setWordWrap(True)
+            helper_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            helper_label.setStyleSheet("color: #9fb2cc;")
+            self.answer_cards_layout.addWidget(helper_label)
+            self._sync_flashcard_question_selection(chapter)
+            return
+
         for index, question in enumerate(chapter.questions, start=1):
             card = QuestionCardWidget(
                 chapter.title,
                 index,
                 question,
                 reveal_answers=True,
+                flashcard_mode=self.flashcard_mode_enabled,
             )
             self.answer_cards.append(card)
             self.answer_cards_layout.addWidget(card)
 
+        self.answer_cards_layout.addStretch(1)
+
+    def _render_flashcard_assessment_view(self, chapter: QuizChapter):
+        mastered_count = max(0, self.flashcard_total_cards - len(self.flashcard_last_review_needed_keys))
+        review_count = len(self.flashcard_last_review_needed_keys)
+        mastered_label = "Mastered this round" if self.flashcard_review_only_mode else "Mastered on first pass"
+        review_label = "Need another review round" if self.flashcard_review_only_mode else "Need more study"
+
+        summary_label = QLabel(
+            (
+                f"Flashcard assessment for {chapter.title}\n\n"
+                f"{mastered_label}: {mastered_count}/{self.flashcard_total_cards}\n"
+                f"{review_label}: {review_count}/{self.flashcard_total_cards}"
+            ),
+            self.answer_container,
+        )
+        summary_label.setWordWrap(True)
+        summary_label.setStyleSheet("color: #edf4ff; font-weight: 600;")
+        self.answer_cards_layout.addWidget(summary_label)
+
+        chart = PieChartWidget(self.answer_container)
+        chart.set_segments(
+            [
+                ("Mastered", mastered_count, QColor("#34d399")),
+                ("Study Again", review_count, QColor("#f59e0b")),
+            ]
+        )
+        self.answer_cards_layout.addWidget(chart)
+
+        action_row = QWidget(self.answer_container)
+        action_layout = QHBoxLayout(action_row)
+        action_layout.setContentsMargins(0, 0, 0, 0)
+        action_layout.setSpacing(8)
+
+        quiz_mode_button = QPushButton("Switch to Quiz Mode", action_row)
+        review_button = QPushButton(
+            f"Flashcards To Review ({review_count})",
+            action_row,
+        )
+        learn_mode_button = QPushButton("Learn Mode", action_row)
+
+        quiz_mode_button.clicked.connect(self._switch_to_quiz_mode)
+        review_button.clicked.connect(self._start_flashcard_review_deck)
+        learn_mode_button.clicked.connect(self._restart_flashcard_learn_mode)
+        review_button.setEnabled(review_count > 0)
+
+        action_layout.addWidget(quiz_mode_button)
+        action_layout.addWidget(review_button)
+        action_layout.addWidget(learn_mode_button)
+        self.answer_cards_layout.addWidget(action_row)
+
+        helper_label = QLabel(
+            "Use Quiz Mode for regular testing, Flashcards To Review for the cards you pushed right, or Learn Mode to run the full deck again.",
+            self.answer_container,
+        )
+        helper_label.setWordWrap(True)
+        helper_label.setStyleSheet("color: #9fb2cc;")
+        self.answer_cards_layout.addWidget(helper_label)
         self.answer_cards_layout.addStretch(1)
 
     def _refresh_long_quiz_answer_cards(self):
@@ -1479,10 +2355,10 @@ class ChapterQuizTabController(QObject):
             elif not self._available_long_quiz_chapters():
                 message = "Add questions to one or more chapters to generate a long quiz."
             elif not self.long_quiz_selected_chapters:
-                message = "Choose chapters to include in the long quiz."
+                message = "Open Quiz Options and choose the chapters to include in the long quiz."
             else:
                 message = (
-                    "Choose your chapters, set a question count, then click Generate Test "
+                    "Open Quiz Options, choose your chapters, set a question count, then click Generate Test "
                     "to build a shuffled long quiz."
                 )
 
@@ -1512,9 +2388,14 @@ class ChapterQuizTabController(QObject):
         chapter = self._selected_chapter()
         if chapter is None:
             self.bank.selected_chapter = ""
+            self._reset_flashcard_session()
             self.question_list.clear()
             self._clear_layout(self.answer_cards_layout)
-            self.answer_header_label.setText("Generated Test" if self._is_long_quiz() else "Answer Board")
+            self.answer_header_label.setText(
+                "Generated Test"
+                if self._is_long_quiz()
+                else ("Flashcards" if self.flashcard_mode_enabled else "Answer Board")
+            )
             self._reset_review_state()
             self._refresh_branch_tree()
             self._save_to_storage()
@@ -1523,6 +2404,8 @@ class ChapterQuizTabController(QObject):
             return
 
         self.bank.selected_chapter = chapter.title
+        if self.flashcard_session_chapter != chapter.title:
+            self._reset_flashcard_session()
         self._refresh_questions()
         self._refresh_answer_cards()
         self._sync_branch_tree_selection()
@@ -1532,6 +2415,16 @@ class ChapterQuizTabController(QObject):
     def _on_question_changed(self, row: int):
         if self._is_long_quiz():
             return
+        if self.flashcard_mode_enabled:
+            chapter = self._selected_chapter()
+            if chapter is None:
+                return
+            self._ensure_flashcard_session(chapter)
+            if self.flashcard_assessment_ready:
+                return
+            self._jump_flashcard_to_question(chapter, row)
+            self._refresh_answer_cards()
+            return
         if row < 0 or row >= len(self.answer_cards):
             return
 
@@ -1540,6 +2433,12 @@ class ChapterQuizTabController(QObject):
 
     def _on_branch_toggle_toggled(self, checked: bool):
         self._update_branch_toggle()
+
+    def _on_flashcard_mode_toggled(self, checked: bool):
+        self.flashcard_mode_enabled = bool(checked)
+        if self.flashcard_mode_enabled:
+            self._reset_flashcard_session()
+        self._refresh_answer_cards()
 
     def _on_branch_tree_selection_changed(self):
         if self.branch_tree is None:
@@ -1683,6 +2582,10 @@ class ChapterQuizTabController(QObject):
                 existing.answer_text = incoming_question.answer_text
                 existing.explanation = incoming_question.explanation
                 existing.tags = incoming_question.tags
+                existing.question_type = incoming_question.question_type
+                existing.expected_answer = incoming_question.expected_answer
+                existing.accepted_deviation = incoming_question.accepted_deviation
+                existing.solution_file = incoming_question.solution_file
             else:
                 target.questions.append(incoming_question)
 
@@ -1712,6 +2615,10 @@ class ChapterQuizTabController(QObject):
                 existing.answer_text = incoming_question.answer_text
                 existing.explanation = incoming_question.explanation
                 existing.tags = incoming_question.tags
+                existing.question_type = incoming_question.question_type
+                existing.expected_answer = incoming_question.expected_answer
+                existing.accepted_deviation = incoming_question.accepted_deviation
+                existing.solution_file = incoming_question.solution_file
             else:
                 target.questions.append(incoming_question)
 
@@ -1815,6 +2722,7 @@ class ChapterQuizTabController(QObject):
 
     def _after_question_bank_mutation(self):
         self._reset_review_state()
+        self._reset_flashcard_session()
         if self._is_long_quiz():
             self.long_quiz_generated_refs = []
             self._reconcile_long_quiz_state()
@@ -1857,27 +2765,6 @@ class ChapterQuizTabController(QObject):
         self.long_quiz_requested_count = requested_count
         self.long_quiz_generated_refs = []
         self._reconcile_long_quiz_state()
-        self._reset_review_state()
-        self._refresh_answer_cards()
-        self._update_long_quiz_controls()
-        self._save_to_storage()
-
-    def _on_long_quiz_count_changed(self, value: int):
-        if not self._is_long_quiz():
-            return
-
-        available_count = self._long_quiz_available_question_count()
-        clamped_value = min(max(0, value), available_count)
-        if clamped_value != value and self.long_quiz_question_count_spinbox is not None:
-            self.long_quiz_question_count_spinbox.blockSignals(True)
-            self.long_quiz_question_count_spinbox.setValue(clamped_value)
-            self.long_quiz_question_count_spinbox.blockSignals(False)
-
-        if clamped_value == self.long_quiz_requested_count:
-            return
-
-        self.long_quiz_requested_count = clamped_value
-        self.long_quiz_generated_refs = []
         self._reset_review_state()
         self._refresh_answer_cards()
         self._update_long_quiz_controls()
@@ -1952,19 +2839,15 @@ class ChapterQuizTabController(QObject):
         question_results: list[QuestionResult] = []
 
         for card in self.answer_cards:
-            if card.selected_choice >= 0:
+            if card.has_response():
                 answered += 1
-            is_correct = card.selected_choice == card.question.answer_index
+            is_correct = card.is_correct_response()
             if is_correct:
                 correct += 1
             card.reveal_review(is_correct)
             
             # Build question result for assessment
-            user_answer = (
-                card.question.choices[card.selected_choice]
-                if card.selected_choice >= 0
-                else None
-            )
+            user_answer = card.user_answer_text()
             question_results.append(
                 QuestionResult(
                     question_text=card.question.question,
@@ -2063,28 +2946,56 @@ class ChapterQuizTabController(QObject):
     def _available_long_quiz_chapters(self) -> list[QuizChapter]:
         return [chapter for chapter in self.bank.chapters if chapter.questions]
 
+    def _long_quiz_selectable_titles(self) -> list[str]:
+        titles: list[str] = []
+        for chapter in self._available_long_quiz_chapters():
+            chapter_title, subchapter_title = split_leaf_path(chapter.title)
+            candidates = [chapter.title]
+            if subchapter_title is not None:
+                candidates.insert(0, chapter_title)
+            for candidate in candidates:
+                if any(saved.lower() == candidate.lower() for saved in titles):
+                    continue
+                titles.append(candidate)
+        return titles
+
+    def _expanded_long_quiz_selection_keys(
+        self,
+        selected_titles: list[str] | None = None,
+    ) -> set[str]:
+        if selected_titles is None:
+            selected_titles = self.long_quiz_selected_chapters
+        selected_keys = {title.lower() for title in selected_titles}
+        expanded_keys: set[str] = set()
+        for chapter in self.bank.chapters:
+            chapter_title, _subchapter_title = split_leaf_path(chapter.title)
+            if chapter.title.lower() in selected_keys or chapter_title.lower() in selected_keys:
+                expanded_keys.add(chapter.title.lower())
+        return expanded_keys
+
     def _canonical_chapter_title(self, title: str) -> str | None:
         normalized = title.strip().lower()
-        for chapter in self.bank.chapters:
-            if chapter.title.lower() == normalized:
-                return chapter.title
+        for chapter_title in self._long_quiz_selectable_titles():
+            if chapter_title.lower() == normalized:
+                return chapter_title
         return None
 
     def _default_long_quiz_chapter_selection(self) -> list[str]:
-        available_titles = [chapter.title for chapter in self._available_long_quiz_chapters()]
+        available_titles = self._long_quiz_selectable_titles()
         if not available_titles:
             return []
 
         selected_chapter = self._selected_chapter()
-        if selected_chapter is not None and selected_chapter.questions:
-            return [selected_chapter.title]
+        if selected_chapter is not None:
+            chapter_title, _subchapter_title = split_leaf_path(selected_chapter.title)
+            for candidate in (selected_chapter.title, chapter_title):
+                if any(title.lower() == candidate.lower() for title in available_titles):
+                    return [candidate]
 
         if self.bank.selected_chapter:
             canonical = self._canonical_chapter_title(self.bank.selected_chapter)
             if canonical is not None:
-                for chapter in self._available_long_quiz_chapters():
-                    if chapter.title == canonical:
-                        return [canonical]
+                return [canonical]
 
         return [available_titles[0]]
 
@@ -2093,8 +3004,8 @@ class ChapterQuizTabController(QObject):
             return False
 
         changed = False
-        available_chapters = self._available_long_quiz_chapters()
-        available_by_key = {chapter.title.lower(): chapter.title for chapter in available_chapters}
+        available_titles = self._long_quiz_selectable_titles()
+        available_by_key = {title.lower(): title for title in available_titles}
 
         selected_titles: list[str] = []
         seen_keys: set[str] = set()
@@ -2106,7 +3017,7 @@ class ChapterQuizTabController(QObject):
             seen_keys.add(key)
             selected_titles.append(canonical)
 
-        if not selected_titles and available_chapters:
+        if not selected_titles and available_titles:
             selected_titles = self._default_long_quiz_chapter_selection()
 
         if selected_titles != self.long_quiz_selected_chapters:
@@ -2124,7 +3035,7 @@ class ChapterQuizTabController(QObject):
 
         valid_refs: list[LongQuizQuestionRef] = []
         generated_items_valid = True
-        selected_keys = {title.lower() for title in self.long_quiz_selected_chapters}
+        selected_keys = self._expanded_long_quiz_selection_keys()
         for ref in self.long_quiz_generated_refs:
             resolved = self._resolve_long_quiz_ref(ref)
             if resolved is None or resolved[0].lower() not in selected_keys:
@@ -2155,7 +3066,7 @@ class ChapterQuizTabController(QObject):
     ) -> list[tuple[str, QuizQuestion]]:
         if selected_titles is None:
             selected_titles = self.long_quiz_selected_chapters
-        selected_keys = {title.lower() for title in selected_titles}
+        selected_keys = self._expanded_long_quiz_selection_keys(selected_titles)
         pool: list[tuple[str, QuizQuestion]] = []
         for chapter in self.bank.chapters:
             if chapter.title.lower() not in selected_keys:
@@ -2201,57 +3112,38 @@ class ChapterQuizTabController(QObject):
     ) -> list[tuple[str, int]]:
         counts = {title: 0 for title in self.long_quiz_selected_chapters}
         for chapter_title, _question in generated_items:
-            counts[chapter_title] = counts.get(chapter_title, 0) + 1
+            chapter_key = chapter_title.lower()
+            for selected_title in self.long_quiz_selected_chapters:
+                selected_key = selected_title.lower()
+                if chapter_key == selected_key:
+                    counts[selected_title] = counts.get(selected_title, 0) + 1
+                    continue
+                parent_title, subchapter_title = split_leaf_path(chapter_title)
+                if subchapter_title is not None and parent_title.lower() == selected_key:
+                    counts[selected_title] = counts.get(selected_title, 0) + 1
         return [(title, counts.get(title, 0)) for title in self.long_quiz_selected_chapters]
-
-    def _long_quiz_summary_text(self) -> str:
-        if self.subject_name is None:
-            return "Select a subject to configure a shuffled long quiz."
-
-        available_chapters = self._available_long_quiz_chapters()
-        if not available_chapters:
-            return "Add questions to one or more chapters to enable long-quiz generation."
-
-        selected_count = len(self.long_quiz_selected_chapters)
-        available_count = self._long_quiz_available_question_count()
-        generated_items = self._generated_long_quiz_items() or []
-
-        if not generated_items:
-            return (
-                f"Selected chapters: {selected_count} | "
-                f"Question pool: {available_count} | "
-                f"Requested: {self.long_quiz_requested_count} | "
-                "Generate a shuffled test to preview coverage."
-            )
-
-        coverage = ", ".join(
-            f"{chapter_title} ({count})"
-            for chapter_title, count in self._long_quiz_generated_coverage(generated_items)
-        )
-        return (
-            f"Generated {len(generated_items)} shuffled question"
-            f"{'s' if len(generated_items) != 1 else ''} | Coverage: {coverage}"
-        )
 
     def _update_long_quiz_controls(self):
         if not self._is_long_quiz():
             return
-        if self.long_quiz_summary_label is not None:
-            self.long_quiz_summary_label.setText(self._long_quiz_summary_text())
 
         available_chapters = self._available_long_quiz_chapters()
         available_count = self._long_quiz_available_question_count()
         has_subject = self.subject_name is not None
 
-        if self.long_quiz_choose_chapters_button is not None:
-            self.long_quiz_choose_chapters_button.setEnabled(has_subject and bool(available_chapters))
-
-        if self.long_quiz_question_count_spinbox is not None:
-            self.long_quiz_question_count_spinbox.blockSignals(True)
-            self.long_quiz_question_count_spinbox.setMaximum(max(0, available_count))
-            self.long_quiz_question_count_spinbox.setValue(min(self.long_quiz_requested_count, available_count))
-            self.long_quiz_question_count_spinbox.setEnabled(has_subject and available_count > 0)
-            self.long_quiz_question_count_spinbox.blockSignals(False)
+        if self.long_quiz_options_button is not None:
+            self.long_quiz_options_button.setEnabled(has_subject and bool(available_chapters))
+            selected_count = len(self.long_quiz_selected_chapters)
+            count_label = (
+                f"{self.long_quiz_requested_count} question"
+                f"{'s' if self.long_quiz_requested_count != 1 else ''}"
+            )
+            if selected_count > 0 and self.long_quiz_requested_count > 0:
+                self.long_quiz_options_button.setText(
+                    f"Quiz Options ({selected_count} chapters, {count_label})"
+                )
+            else:
+                self.long_quiz_options_button.setText("Quiz Options")
 
         if self.long_quiz_generate_button is not None:
             self.long_quiz_generate_button.setEnabled(

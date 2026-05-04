@@ -958,6 +958,7 @@ class TimeOrganizerController(QObject):
         toolbar_layout.setContentsMargins(0, 0, 0, 0)
 
         self.gant_title = QLabel("Gantt Chart", toolbar)
+        self.gant_title.setStyleSheet("color: #f8fbff; font-size: 16pt; font-weight: 700;")
         self.gant_prev_button = QPushButton("<", toolbar)
         self.gant_next_button = QPushButton(">", toolbar)
         self.gant_view_mode_combo = QComboBox(toolbar)
@@ -968,6 +969,8 @@ class TimeOrganizerController(QObject):
         self.gant_delete_button = QPushButton("Delete", toolbar)
         self.gant_month_label = QLabel(toolbar)
         self.gant_status_label = QLabel(toolbar)
+        self.gant_month_label.setStyleSheet("color: #7ab0ff; font-size: 10.5pt; font-weight: 700;")
+        self.gant_status_label.setStyleSheet("color: #93a8c7; font-size: 10pt; font-weight: 500;")
 
         toolbar_layout.addWidget(self.gant_title)
         toolbar_layout.addSpacing(8)
@@ -1015,6 +1018,8 @@ class TimeOrganizerController(QObject):
         toolbar_layout.setContentsMargins(0, 0, 0, 0)
         self.calendar_title = QLabel("Calendar", toolbar)
         self.calendar_status_label = QLabel(toolbar)
+        self.calendar_title.setStyleSheet("color: #f8fbff; font-size: 16pt; font-weight: 700;")
+        self.calendar_status_label.setStyleSheet("color: #93a8c7; font-size: 10pt; font-weight: 500;")
         self.calendar_add_button = QPushButton("Add Task", toolbar)
         self.calendar_edit_button = QPushButton("Edit", toolbar)
         self.calendar_delete_button = QPushButton("Delete", toolbar)
@@ -1138,6 +1143,8 @@ class TimeOrganizerController(QObject):
 
         self.todo_title = QLabel("Todo List", toolbar)
         self.todo_status_label = QLabel(toolbar)
+        self.todo_title.setStyleSheet("color: #f8fbff; font-size: 16pt; font-weight: 700;")
+        self.todo_status_label.setStyleSheet("color: #93a8c7; font-size: 10pt; font-weight: 500;")
         toolbar_layout.addWidget(self.todo_title)
         toolbar_layout.addStretch(1)
         toolbar_layout.addWidget(self.todo_status_label)
@@ -1207,6 +1214,7 @@ class TimeOrganizerController(QObject):
         todo_layout.setSpacing(8)
 
         todo_header = QLabel("Checklist", self.todo_checklist_panel)
+        todo_header.setStyleSheet("color: #7ab0ff; font-size: 10.5pt; font-weight: 700;")
         todo_layout.addWidget(todo_header)
 
         input_row = QWidget(self.todo_checklist_panel)
@@ -1257,6 +1265,7 @@ class TimeOrganizerController(QObject):
         toolbar_layout.setContentsMargins(0, 0, 0, 0)
         
         title_label = QLabel("Activity Overview", toolbar)
+        title_label.setStyleSheet("color: #f8fbff; font-size: 16pt; font-weight: 700;")
         self.activity_view_mode_combo = QComboBox(toolbar)
         for mode_key, (label, _) in ActivityOverviewWidget.VIEW_MODES.items():
             self.activity_view_mode_combo.addItem(label, mode_key)
@@ -1341,7 +1350,23 @@ class TimeOrganizerController(QObject):
         return self.TIMER_PRESETS.get(mode, self.TIMER_PRESETS["pomodoro"])[1]
 
     def _preset_label(self, mode: str) -> str:
+        if mode in {"short_quiz", "long_quiz"} and self.subject_name:
+            suffix = "Short Quiz" if mode == "short_quiz" else "Long Quiz"
+            return f"{self.subject_name} ({suffix})"
         return self.TIMER_PRESETS.get(mode, self.TIMER_PRESETS["pomodoro"])[0]
+
+    def _combo_label_for_mode(self, mode: str) -> str:
+        if mode == "short_quiz" and self.subject_name:
+            return f"{self.subject_name} (Short Quiz)"
+        if mode == "long_quiz" and self.subject_name:
+            return f"{self.subject_name} (Long Quiz)"
+        return self.TIMER_PRESETS.get(mode, self.TIMER_PRESETS["pomodoro"])[0]
+
+    def _refresh_timer_mode_combo_labels(self):
+        for index in range(self.timer_mode_combo.count()):
+            mode = self.timer_mode_combo.itemData(index)
+            if isinstance(mode, str):
+                self.timer_mode_combo.setItemText(index, self._combo_label_for_mode(mode))
 
     def _on_gantt_task_width_changed(self, width: int):
         self.gantt_task_column_width = max(GanttChartWidget.MIN_TASK_COLUMN_WIDTH, int(width))
@@ -1371,7 +1396,17 @@ class TimeOrganizerController(QObject):
         finally:
             self._syncing_gantt_selection = False
 
-    def set_subject(self, subject_name: str | None):
+    def set_subject(
+        self,
+        subject_name: str | None,
+        *,
+        preserve_timer_state: bool = False,
+    ):
+        previous_timer_mode = self.selected_timer_mode
+        previous_custom_seconds = self.custom_timer_seconds
+        previous_remaining_seconds = self.remaining_seconds
+        previous_running_state = self.countdown_timer.isActive()
+
         if self.subject_name is not None:
             self._flush_gantt_state_save()
 
@@ -1397,6 +1432,15 @@ class TimeOrganizerController(QObject):
 
         self.storage_path = self.storage_root / f"{slugify(self.subject_name)}.json"
         self._load()
+
+        if preserve_timer_state:
+            self.selected_timer_mode = previous_timer_mode
+            self.custom_timer_seconds = previous_custom_seconds
+            self.remaining_seconds = previous_remaining_seconds
+            if previous_running_state:
+                self.countdown_timer.start()
+            self._refresh_timer_controls()
+            self._refresh_timer_display()
 
     def _load(self):
         if self.storage_path is None or not self.storage_path.exists():
@@ -1778,8 +1822,9 @@ class TimeOrganizerController(QObject):
 
     def _refresh_timer_controls(self):
         has_subject = self.subject_name is not None
-        combo_index = self.timer_mode_combo.findData(self.selected_timer_mode)
         self.timer_mode_combo.blockSignals(True)
+        self._refresh_timer_mode_combo_labels()
+        combo_index = self.timer_mode_combo.findData(self.selected_timer_mode)
         if combo_index >= 0:
             self.timer_mode_combo.setCurrentIndex(combo_index)
         self.timer_mode_combo.setEnabled(has_subject)
@@ -1797,7 +1842,7 @@ class TimeOrganizerController(QObject):
         if has_subject:
             custom_minutes = max(1, self.custom_timer_seconds // 60)
             self.timer_helper_label.setText(
-                "Choose Pomodoro, Custom, Short Quiz, or Long Quiz, then start, pause, or reset the countdown. "
+                "Choose Pomodoro, Custom, or one of the subject quiz timers, then start, pause, or reset the countdown. "
                 f"Custom is currently set to {custom_minutes} minute{'s' if custom_minutes != 1 else ''}."
             )
         else:

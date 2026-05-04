@@ -1,11 +1,12 @@
 import json
+import math
 import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor
+from PySide6.QtCore import QRectF, Qt, Signal
+from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -23,18 +24,157 @@ from PySide6.QtWidgets import (
     QHeaderView,
 )
 
-from .quiz_tab import QuizAttempt, QuestionResult
+from .quiz_tab import QuizAttempt, QuestionResult, load_quiz_bank_from_path, slugify
+
+
+class TagPieChartWidget(QWidget):
+    tagSelected = Signal(str)
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self._segments: list[tuple[str, int, QColor]] = []
+        self._selected_tag: str | None = None
+        self._pie_rect = QRectF()
+        self._segment_ranges: list[tuple[str, float, float]] = []
+        self._legend_rects: list[tuple[str, QRectF]] = []
+        self.setMinimumHeight(280)
+
+    def set_segments(self, segments: list[tuple[str, int, QColor]]):
+        self._segments = [(tag, max(0, value), color) for tag, value, color in segments if value > 0]
+        available_tags = {tag for tag, _value, _color in self._segments}
+        if self._selected_tag not in available_tags:
+            self._selected_tag = self._segments[0][0] if self._segments else None
+        self.update()
+
+    def set_selected_tag(self, tag: str | None):
+        self._selected_tag = tag
+        self.update()
+
+    def selected_tag(self) -> str | None:
+        return self._selected_tag
+
+    def mousePressEvent(self, event):
+        point = event.position()
+
+        for tag, rect in self._legend_rects:
+            if rect.contains(point):
+                self._selected_tag = tag
+                self.update()
+                self.tagSelected.emit(tag)
+                return
+
+        if not self._pie_rect.contains(point):
+            return
+
+        center = self._pie_rect.center()
+        dx = point.x() - center.x()
+        dy = point.y() - center.y()
+        radius = self._pie_rect.width() / 2
+        distance = math.hypot(dx, dy)
+        if distance > radius or distance <= 0:
+            return
+
+        angle = math.degrees(math.atan2(center.y() - point.y(), point.x() - center.x()))
+        if angle < 0:
+            angle += 360
+        relative_angle = (90 - angle) % 360
+
+        for tag, start_angle, end_angle in self._segment_ranges:
+            if start_angle <= relative_angle < end_angle:
+                self._selected_tag = tag
+                self.update()
+                self.tagSelected.emit(tag)
+                return
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        if not self._segments:
+            painter.setPen(QColor("#9fb2cc"))
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "No weak-area tag data yet.")
+            self._pie_rect = QRectF()
+            self._segment_ranges = []
+            self._legend_rects = []
+            return
+
+        margin = 16
+        legend_width = min(240, max(180, self.width() // 3))
+        pie_size = min(
+            max(160, self.height() - margin * 2),
+            max(160, self.width() - legend_width - margin * 3),
+        )
+        pie_size = min(pie_size, self.height() - margin * 2)
+        pie_x = margin
+        pie_y = max(margin, (self.height() - pie_size) / 2)
+        self._pie_rect = QRectF(pie_x, pie_y, pie_size, pie_size)
+        self._segment_ranges = []
+        self._legend_rects = []
+
+        total = sum(value for _tag, value, _color in self._segments)
+        current_angle = 0.0
+        for tag, value, color in self._segments:
+            span = (value / total) * 360 if total else 0
+            is_selected = tag == self._selected_tag
+            painter.setBrush(color)
+            painter.setPen(QPen(QColor("#f8fbff") if is_selected else QColor("#0b1220"), 3 if is_selected else 1))
+            painter.drawPie(
+                self._pie_rect,
+                int((90 - current_angle) * 16),
+                int(-span * 16),
+            )
+            self._segment_ranges.append((tag, current_angle, current_angle + span))
+            current_angle += span
+
+        legend_x = self._pie_rect.right() + 24
+        legend_y = margin + 8
+        painter.setPen(QColor("#edf4ff"))
+        painter.drawText(int(legend_x), int(legend_y), "Tags")
+        legend_y += 16
+
+        for tag, value, color in self._segments:
+            row_rect = QRectF(legend_x - 8, legend_y - 12, legend_width - 8, 24)
+            is_selected = tag == self._selected_tag
+            if is_selected:
+                painter.fillRect(row_rect, QColor("#132136"))
+                painter.setPen(QPen(QColor("#2f74ff"), 1))
+                painter.drawRoundedRect(row_rect, 8, 8)
+            painter.fillRect(int(legend_x), int(legend_y - 6), 14, 14, color)
+            painter.setPen(QColor("#edf4ff"))
+            painter.drawText(
+                int(legend_x + 24),
+                int(legend_y + 6),
+                f"{tag} ({value})",
+            )
+            self._legend_rects.append((tag, row_rect))
+            legend_y += 28
 
 
 class AssessmentTabController:
     """Manages the Assessment tab for analyzing quiz results."""
 
+    WEAK_AREA_TAG_COLORS = [
+        QColor("#2f74ff"),
+        QColor("#34d399"),
+        QColor("#f59e0b"),
+        QColor("#ef4444"),
+        QColor("#a78bfa"),
+        QColor("#22d3ee"),
+        QColor("#f472b6"),
+        QColor("#84cc16"),
+    ]
+
     def __init__(self, page: QWidget):
         self.page = page
         self.subject_name: str | None = None
         self.storage_path: Path | None = None
+        self.results_root = Path(__file__).resolve().parent.parent / "gant_chart"
+        self.quiz_bank_root = Path(__file__).resolve().parent.parent / "quiz_banks"
         self.attempts: list[QuizAttempt] = []
         self.subject_resolver: Callable[[], str | None] | None = None
+        self._selected_weak_tag: str | None = None
+        self._weak_area_questions_by_tag: dict[str, list[dict[str, Any]]] = {}
 
         self._build_ui()
         self._wire_signals()
@@ -182,11 +322,26 @@ class AssessmentTabController:
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(12)
 
-        label = QLabel("Frequently Missed Questions (Review These!)")
+        label = QLabel("Weak Areas by Tag")
         label.setStyleSheet("font-size: 11pt; font-weight: 700; color: #edf4ff;")
         layout.addWidget(label)
 
+        helper_label = QLabel(
+            "Select a pie slice or legend tag to view the missed questions grouped under that tag."
+        )
+        helper_label.setWordWrap(True)
+        helper_label.setStyleSheet("color: #9fb2cc;")
+        layout.addWidget(helper_label)
+
+        self.weak_area_chart = TagPieChartWidget(self.weak_areas_tab)
+        layout.addWidget(self.weak_area_chart)
+
+        self.weak_area_selection_label = QLabel("Questions")
+        self.weak_area_selection_label.setStyleSheet("font-size: 10.5pt; font-weight: 700; color: #edf4ff;")
+        layout.addWidget(self.weak_area_selection_label)
+
         self.weak_areas_list = QListWidget(self.weak_areas_tab)
+        self.weak_areas_list.setAlternatingRowColors(True)
         layout.addWidget(self.weak_areas_list)
 
     def _wire_signals(self):
@@ -194,6 +349,7 @@ class AssessmentTabController:
         self.export_button.clicked.connect(self.export_results)
         self.clear_button.clicked.connect(self.clear_all_results)
         self.refresh_button.clicked.connect(self._refresh_ui)
+        self.weak_area_chart.tagSelected.connect(self._on_weak_area_tag_selected)
 
     def set_subject(self, subject_name: str | None):
         """Set the current subject and load its assessment data."""
@@ -207,15 +363,22 @@ class AssessmentTabController:
             self._refresh_ui()
             return
 
-        base_dir = Path(__file__).resolve().parent.parent / "gant_chart"
-        from .quiz_tab import slugify
-
-        self.storage_path = base_dir / f"{slugify(self.subject_name)}.json"
+        self.storage_path = self.results_root / f"{slugify(self.subject_name)}.json"
         self._load_attempts()
 
     def set_subject_resolver(self, resolver: Callable[[], str | None]):
         """Set a function that resolves the current subject."""
         self.subject_resolver = resolver
+
+    def set_storage_roots(self, *, results_root: str | Path, quiz_bank_root: str | Path):
+        """Configure persistent storage roots for results and quiz-bank lookups."""
+        self.results_root = Path(results_root)
+        self.quiz_bank_root = Path(quiz_bank_root)
+        self.results_root.mkdir(parents=True, exist_ok=True)
+        self.quiz_bank_root.mkdir(parents=True, exist_ok=True)
+        if self.subject_name:
+            self.storage_path = self.results_root / f"{slugify(self.subject_name)}.json"
+            self._load_attempts()
 
     def _load_attempts(self):
         """Load quiz attempts from storage."""
@@ -381,25 +544,119 @@ class AssessmentTabController:
             self.chapter_table.setItem(row, 4, QTableWidgetItem(str(best_score)))
 
     def _refresh_weak_areas(self):
-        """Refresh weak areas (frequently missed questions)."""
-        missed_questions: dict[str, int] = {}
+        """Refresh weak areas as a tag pie chart and question list."""
+        tag_counts: dict[str, int] = {}
+        questions_by_tag: dict[str, dict[tuple[str, str], dict[str, Any]]] = {}
+        question_lookup = self._load_question_metadata_lookup()
 
         for attempt in self.attempts:
             for qr in attempt.question_results:
-                if not qr.is_correct:
-                    key = f"{qr.chapter_title}: {qr.question_text[:60]}..."
-                    missed_questions[key] = missed_questions.get(key, 0) + 1
+                if qr.is_correct:
+                    continue
 
+                lookup_key = self._question_lookup_key(qr.chapter_title, qr.question_text)
+                question_meta = question_lookup.get(lookup_key)
+                tags = question_meta["tags"] if question_meta else []
+                if not tags:
+                    tags = ["Untagged"]
+
+                chapter_title = question_meta["chapter_title"] if question_meta else qr.chapter_title
+                question_text = question_meta["question_text"] if question_meta else qr.question_text
+                question_index = question_meta["index"] if question_meta else "?"
+
+                for tag in tags:
+                    tag_counts[tag] = tag_counts.get(tag, 0) + 1
+                    tag_questions = questions_by_tag.setdefault(tag, {})
+                    question_key = self._question_lookup_key(chapter_title, question_text)
+                    if question_key not in tag_questions:
+                        tag_questions[question_key] = {
+                            "chapter_title": chapter_title,
+                            "index": question_index,
+                            "question_text": question_text,
+                            "miss_count": 0,
+                        }
+                    tag_questions[question_key]["miss_count"] += 1
+
+        sorted_tags = sorted(tag_counts.items(), key=lambda item: item[1], reverse=True)
+        self._weak_area_questions_by_tag = {
+            tag: sorted(
+                questions.values(),
+                key=lambda entry: (-entry["miss_count"], str(entry["chapter_title"]).lower(), str(entry["index"])),
+            )
+            for tag, questions in questions_by_tag.items()
+        }
+
+        segments = [
+            (tag, count, self.WEAK_AREA_TAG_COLORS[index % len(self.WEAK_AREA_TAG_COLORS)])
+            for index, (tag, count) in enumerate(sorted_tags)
+        ]
+        self.weak_area_chart.set_segments(segments)
+
+        available_tags = [tag for tag, _count in sorted_tags]
+        if self._selected_weak_tag not in available_tags:
+            self._selected_weak_tag = available_tags[0] if available_tags else None
+        self.weak_area_chart.set_selected_tag(self._selected_weak_tag)
+        self._refresh_weak_area_question_list()
+
+    def _question_lookup_key(self, chapter_title: str, question_text: str) -> tuple[str, str]:
+        return chapter_title.strip().casefold(), question_text.strip().casefold()
+
+    def _quiz_bank_root(self) -> Path:
+        return self.quiz_bank_root
+
+    def _load_question_metadata_lookup(self) -> dict[tuple[str, str], dict[str, Any]]:
+        if not self.subject_name:
+            return {}
+
+        subject_dir = self._quiz_bank_root() / slugify(self.subject_name)
+        lookup: dict[tuple[str, str], dict[str, Any]] = {}
+        for quiz_filename in ("short_quiz.json", "long_quiz.json"):
+            quiz_path = subject_dir / quiz_filename
+            if not quiz_path.exists():
+                continue
+            try:
+                bank = load_quiz_bank_from_path(quiz_path)
+            except Exception:
+                continue
+            for chapter in bank.chapters:
+                for index, question in enumerate(chapter.questions, start=1):
+                    key = self._question_lookup_key(chapter.title, question.question)
+                    lookup.setdefault(
+                        key,
+                        {
+                            "chapter_title": chapter.title,
+                            "question_text": question.question,
+                            "index": index,
+                            "tags": [tag.strip() for tag in question.tags if tag.strip()],
+                        },
+                    )
+        return lookup
+
+    def _refresh_weak_area_question_list(self):
         self.weak_areas_list.clear()
 
-        # Sort by frequency
-        sorted_questions = sorted(missed_questions.items(), key=lambda x: x[1], reverse=True)
-        for question, count in sorted_questions[:20]:  # Show top 20
-            item_text = f"[Missed {count}x] {question}"
+        if not self._selected_weak_tag:
+            self.weak_area_selection_label.setText("Questions")
+            self.weak_areas_list.addItem("No weak-area data available yet.")
+            return
+
+        questions = self._weak_area_questions_by_tag.get(self._selected_weak_tag, [])
+        self.weak_area_selection_label.setText(f"Questions for {self._selected_weak_tag}")
+        if not questions:
+            self.weak_areas_list.addItem("No missed questions found for this tag.")
+            return
+
+        for entry in questions:
+            item_text = f"{entry['chapter_title']} : {entry['index']}, {entry['question_text']}"
             item = QListWidgetItem(item_text)
-            if count >= 3:
-                item.setForeground(QColor("#f87171"))  # Red for frequently missed
+            if int(entry["miss_count"]) >= 3:
+                item.setForeground(QColor("#f87171"))
+            item.setToolTip(f"Missed {entry['miss_count']} time(s)")
             self.weak_areas_list.addItem(item)
+
+    def _on_weak_area_tag_selected(self, tag: str):
+        self._selected_weak_tag = tag
+        self._refresh_weak_area_question_list()
 
     def export_results(self):
         """Export all results to JSON file."""

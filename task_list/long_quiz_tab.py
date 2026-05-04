@@ -9,5 +9,5 @@ class LongQuizTabController(ChapterQuizTabController):
             page,
             prefix="long_quiz",
             title="Long Quiz",
-            show_branch_viewer=True,
+            show_branch_viewer=False,
         )

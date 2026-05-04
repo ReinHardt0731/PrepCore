@@ -4,20 +4,30 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from PySide6.QtCore import QByteArray, QStandardPaths, Qt
-from PySide6.QtGui import QIcon, QColor, QPalette
+from PySide6.QtCore import QByteArray, QEvent, QSize, QStandardPaths, Qt
+from PySide6.QtGui import QFont, QIcon, QColor, QPalette
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QDockWidget,
     QFileDialog,
+    QFormLayout,
     QFrame,
     QHBoxLayout,
     QInputDialog,
+    QLabel,
     QLineEdit,
+    QListView,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMenu,
     QMessageBox,
     QPushButton,
+    QToolButton,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -197,6 +207,11 @@ class MainWindow(QMainWindow):
             self.short_quiz_tab.set_storage_root(self._quiz_banks_root())
         if hasattr(self, "long_quiz_tab"):
             self.long_quiz_tab.set_storage_root(self._quiz_banks_root())
+        if hasattr(self, "assessment_tab"):
+            self.assessment_tab.set_storage_roots(
+                results_root=self._time_organizer_root(),
+                quiz_bank_root=self._quiz_banks_root(),
+            )
         if hasattr(self, "time_organizer_tab"):
             self.time_organizer_tab.set_storage_root(self._time_organizer_root())
 
@@ -228,6 +243,9 @@ class MainWindow(QMainWindow):
             "app_icon": APP_ICON_FILENAME,
             "app_logo": APP_LOGO_FILENAME,
             "custom_data_path": None,
+            "timer_follows_subject_selection": True,
+            "planner_follows_subject_selection": True,
+            "subject_navigation_style": "tree",
         }
 
     def _load_preferences(self) -> dict[str, object]:
@@ -372,6 +390,51 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(container)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
+        self.subject_panel_layout = layout
+
+        self.subject_header_row = QWidget(container)
+        header_layout = QHBoxLayout(self.subject_header_row)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(8)
+
+        subject_header_label = QLabel("Subjects", self.subject_header_row)
+        subject_header_label.setStyleSheet("color: #edf4ff; font-size: 13pt; font-weight: 700;")
+        header_layout.addWidget(subject_header_label)
+        header_layout.addStretch(1)
+
+        self.subject_vertical_rail_width = 92
+        self.subject_vertical_button_size = 64
+        self.subject_vertical_emoji_font_size =20
+        self.subject_vertical_compact_width = 94
+        self.subject_vertical_compact_threshold = 220
+        self._subject_vertical_compact_active = False
+
+        self.subject_navigation_toggle = QToolButton(self.subject_header_row)
+        self.subject_navigation_toggle.setCheckable(True)
+        self.subject_navigation_toggle.setStyleSheet(
+            """
+            QToolButton {
+                background-color: #132136;
+                color: #edf4ff;
+                border: 1px solid #23314a;
+                border-radius: 10px;
+                padding: 6px 12px;
+                font-weight: 600;
+            }
+            QToolButton:hover {
+                background-color: #173158;
+                border-color: #2f74ff;
+            }
+            QToolButton:checked {
+                background-color: #173158;
+                border-color: #2f74ff;
+            }
+            """
+        )
+        self.subject_navigation_toggle.toggled.connect(self._on_subject_navigation_mode_toggled)
+        self.subject_navigation_toggle.hide()
+        layout.addWidget(self.subject_header_row, 0)
+        self.ui.Subject.setMinimumWidth(self.subject_vertical_compact_width)
 
         self.subject_tree = QTreeWidget(container)
         self.subject_tree.setHeaderHidden(True)
@@ -412,22 +475,258 @@ class MainWindow(QMainWindow):
         self.subject_tree.itemSelectionChanged.connect(self.on_subject_selection_changed)
         layout.addWidget(self.subject_tree, 1)
 
-        add_row = QFrame(container)
-        add_row.setFrameShape(QFrame.Shape.NoFrame)
-        add_layout = QHBoxLayout(add_row)
+        self.subject_server_panel = QWidget(container)
+        server_panel_layout = QHBoxLayout(self.subject_server_panel)
+        server_panel_layout.setContentsMargins(0, 0, 0, 0)
+        server_panel_layout.setSpacing(10)
+
+        self.subject_vertical_rail_panel = QWidget(self.subject_server_panel)
+        rail_layout = QVBoxLayout(self.subject_vertical_rail_panel)
+        rail_layout.setContentsMargins(0, 0, 0, 0)
+        rail_layout.setSpacing(8)
+
+        self.subject_server_list = QListWidget(self.subject_vertical_rail_panel)
+        self.subject_server_list.setFixedWidth(self.subject_vertical_rail_width)
+        self.subject_server_list.setSpacing(6)
+        self.subject_server_list.setAlternatingRowColors(False)
+        self.subject_server_list.setViewMode(QListView.ViewMode.IconMode)
+        self.subject_server_list.setFlow(QListView.Flow.TopToBottom)
+        self.subject_server_list.setMovement(QListView.Movement.Static)
+        self.subject_server_list.setResizeMode(QListView.ResizeMode.Adjust)
+        self.subject_server_list.setWrapping(False)
+        self.subject_server_list.setUniformItemSizes(True)
+        self.subject_server_list.setTextElideMode(Qt.TextElideMode.ElideNone)
+        self.subject_server_list.setGridSize(self._subject_vertical_slot_size())
+        self.subject_server_list.setFont(self._subject_vertical_emoji_font())
+        self.subject_server_list.setStyleSheet(
+            """
+            QListWidget {
+                background-color: #0f1728;
+                border: 1px solid #22314b;
+                border-radius: 14px;
+                padding: 8px 8px;
+            }
+            QListWidget::item {
+                padding: 0px;
+                margin: 0px 0px 2px 0px;
+                border-radius: 14px;
+                color: #edf4ff;
+            }
+            QListWidget::item:selected {
+                background-color: #173158;
+                border: 1px solid #2f74ff;
+            }
+            QListWidget::item:hover {
+                background-color: #132136;
+            }
+            """
+        )
+        self._apply_subject_vertical_emoji_styling()
+        self.subject_server_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.subject_server_list.customContextMenuRequested.connect(
+            self._show_subject_server_context_menu
+        )
+        self.subject_server_list.itemSelectionChanged.connect(
+            self._on_subject_server_selection_changed
+        )
+        self.subject_server_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        rail_layout.addWidget(self.subject_server_list, 1)
+
+        self.subject_vertical_add_button = QToolButton(self.subject_vertical_rail_panel)
+        self.subject_vertical_add_button.setText("+")
+        self.subject_vertical_add_button.setFixedSize(self._subject_vertical_slot_size())
+        self.subject_vertical_add_button.setStyleSheet(
+            f"""
+            QToolButton {{
+                background-color: #132136;
+                color: #edf4ff;
+                border: 1px solid #23314a;
+                border-radius: 14px;
+                font-size: {max(22, self.subject_vertical_emoji_font_size)}px;
+                font-weight: 700;
+            }}
+            QToolButton:hover {{
+                background-color: #173158;
+                border-color: #2f74ff;
+            }}
+            QToolButton:pressed {{
+                background-color: #102545;
+            }}
+            """
+        )
+        self.subject_vertical_add_button.setToolTip("Add Subject")
+        self.subject_vertical_add_button.clicked.connect(self.prompt_add_subject)
+        rail_layout.addWidget(self.subject_vertical_add_button, 0, Qt.AlignmentFlag.AlignHCenter)
+        server_panel_layout.addWidget(self.subject_vertical_rail_panel, 0)
+
+        self.subject_vertical_chapter_panel = QWidget(self.subject_server_panel)
+        chapter_panel_layout = QVBoxLayout(self.subject_vertical_chapter_panel)
+        chapter_panel_layout.setContentsMargins(0, 0, 0, 0)
+        chapter_panel_layout.setSpacing(8)
+
+        self.subject_server_header_label = QLabel("Select a subject", self.subject_vertical_chapter_panel)
+        self.subject_server_header_label.setStyleSheet(
+            "color: #edf4ff; font-size: 12pt; font-weight: 700;"
+        )
+        chapter_panel_layout.addWidget(self.subject_server_header_label)
+
+        self.subject_server_chapter_tree = QTreeWidget(self.subject_vertical_chapter_panel)
+        self.subject_server_chapter_tree.setHeaderHidden(True)
+        self.subject_server_chapter_tree.setRootIsDecorated(True)
+        self.subject_server_chapter_tree.setIndentation(18)
+        self.subject_server_chapter_tree.setUniformRowHeights(True)
+        self.subject_server_chapter_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.subject_server_chapter_tree.setStyleSheet(
+            """
+            QTreeWidget {
+                background-color: #0f1728;
+                color: #edf4ff;
+                border: 1px solid #22314b;
+                border-radius: 14px;
+                selection-background-color: #2f74ff;
+                outline: none;
+            }
+            QTreeWidget::item {
+                padding: 6px 8px;
+                border-radius: 8px;
+            }
+            QTreeWidget::item:selected {
+                background-color: #173158;
+                color: #ffffff;
+            }
+            """
+        )
+        self.subject_server_chapter_tree.customContextMenuRequested.connect(
+            self._show_subject_server_chapter_context_menu
+        )
+        self.subject_server_chapter_tree.itemSelectionChanged.connect(
+            self._on_subject_server_chapter_selection_changed
+        )
+        chapter_panel_layout.addWidget(self.subject_server_chapter_tree, 1)
+        server_panel_layout.addWidget(self.subject_vertical_chapter_panel, 1)
+        layout.addWidget(self.subject_server_panel, 1)
+
+        self.subject_add_row = QFrame(container)
+        self.subject_add_row.setFrameShape(QFrame.Shape.NoFrame)
+        add_layout = QHBoxLayout(self.subject_add_row)
         add_layout.setContentsMargins(0, 0, 0, 0)
         add_layout.setSpacing(6)
 
-        self.subject_input = QLineEdit(add_row)
+        self.subject_input = QLineEdit(self.subject_add_row)
         self.subject_input.setPlaceholderText("Add a subject")
         self.subject_input.returnPressed.connect(self.add_subject_from_input)
         add_layout.addWidget(self.subject_input, 1)
 
-        self.add_subject_button = QPushButton("Add", add_row)
+        self.add_subject_button = QPushButton("Add", self.subject_add_row)
         self.add_subject_button.clicked.connect(self.add_subject_from_input)
         add_layout.addWidget(self.add_subject_button)
 
-        layout.addWidget(add_row, 0)
+        layout.addWidget(self.subject_add_row, 0)
+        self.ui.Subject.installEventFilter(self)
+        container.installEventFilter(self)
+        self._apply_subject_navigation_mode()
+
+    def _subject_navigation_style(self) -> str:
+        style = str(self.preferences.get("subject_navigation_style", "tree")).strip().lower()
+        return "vertical_widgets" if style in {"servers", "vertical_widgets"} else "tree"
+
+    def _subject_vertical_slot_size(self) -> QSize:
+        return QSize(self.subject_vertical_button_size, self.subject_vertical_button_size)
+
+    def _subject_vertical_emoji_font(self) -> QFont:
+        font = QFont(self.subject_server_list.font())
+        font.setPixelSize(self.subject_vertical_emoji_font_size)
+        font.setWeight(QFont.Weight.DemiBold)
+        return font
+
+    def _apply_subject_vertical_emoji_styling(self):
+        if not hasattr(self, "subject_server_list"):
+            return
+        self.subject_server_list.setFont(self._subject_vertical_emoji_font())
+        for index in range(self.subject_server_list.count()):
+            item = self.subject_server_list.item(index)
+            if item is not None:
+                item.setFont(self._subject_vertical_emoji_font())
+
+    def _apply_subject_navigation_mode(self):
+        vertical_widgets_mode = self._subject_navigation_style() == "vertical_widgets"
+        if hasattr(self, "subject_navigation_toggle"):
+            self.subject_navigation_toggle.blockSignals(True)
+            self.subject_navigation_toggle.setChecked(vertical_widgets_mode)
+            self.subject_navigation_toggle.setText(
+                "Vertical Widgets" if vertical_widgets_mode else "Tree"
+            )
+            self.subject_navigation_toggle.setToolTip(
+                "Toggle between the classic subject tree and the vertical-widgets subject rail."
+            )
+            self.subject_navigation_toggle.blockSignals(False)
+        if hasattr(self, "subject_tree"):
+            self.subject_tree.setVisible(not vertical_widgets_mode)
+        if hasattr(self, "subject_server_panel"):
+            self.subject_server_panel.setVisible(vertical_widgets_mode)
+        self._refresh_subject_server_chapters()
+        self._update_subject_vertical_widgets_layout()
+
+    def _on_subject_navigation_mode_toggled(self, checked: bool):
+        self.preferences["subject_navigation_style"] = "vertical_widgets" if checked else "tree"
+        self._save_preferences()
+        self._apply_subject_navigation_mode()
+
+    def _update_subject_vertical_widgets_layout(self):
+        if not hasattr(self, "subject_vertical_chapter_panel"):
+            return
+
+        vertical_widgets_mode = self._subject_navigation_style() == "vertical_widgets"
+        dock_width = self.ui.Subject.width() if hasattr(self, "ui") else 0
+        compact_mode = vertical_widgets_mode and dock_width <= self.subject_vertical_compact_threshold
+
+        if vertical_widgets_mode:
+            if compact_mode != self._subject_vertical_compact_active:
+                self._subject_vertical_compact_active = compact_mode
+                if compact_mode:
+                    self.resizeDocks(
+                        [self.ui.Subject],
+                        [self.subject_vertical_compact_width],
+                        Qt.Orientation.Horizontal,
+                    )
+
+            self.subject_header_row.setVisible(not compact_mode)
+            self.subject_add_row.setVisible(False)
+            self.subject_vertical_chapter_panel.setVisible(not compact_mode)
+            self.subject_server_header_label.setVisible(not compact_mode)
+            self.subject_vertical_add_button.setVisible(True)
+            self.subject_server_panel.layout().setSpacing(0 if compact_mode else 10)
+            self.subject_server_panel.setMinimumWidth(self.subject_vertical_compact_width)
+            self.subject_server_list.setFixedWidth(
+                self.subject_vertical_compact_width - 16 if compact_mode else self.subject_vertical_rail_width
+            )
+            self.subject_vertical_rail_panel.setFixedWidth(
+                self.subject_vertical_compact_width - 8 if compact_mode else self.subject_vertical_rail_width
+            )
+            self.subject_panel_layout.setContentsMargins(
+                4 if compact_mode else 8,
+                4 if compact_mode else 8,
+                4 if compact_mode else 8,
+                4 if compact_mode else 8,
+            )
+            self.subject_panel_layout.setSpacing(4 if compact_mode else 8)
+        else:
+            self._subject_vertical_compact_active = False
+            self.subject_header_row.setVisible(True)
+            self.subject_add_row.setVisible(True)
+            self.subject_vertical_chapter_panel.setVisible(False)
+            self.subject_server_header_label.setVisible(False)
+            self.subject_vertical_add_button.setVisible(False)
+            self.subject_server_panel.setMinimumWidth(0)
+            self.subject_server_list.setFixedWidth(self.subject_vertical_rail_width)
+            self.subject_vertical_rail_panel.setFixedWidth(self.subject_vertical_rail_width)
+            self.subject_panel_layout.setContentsMargins(8, 8, 8, 8)
+            self.subject_panel_layout.setSpacing(8)
+
+    def eventFilter(self, watched, event):
+        if watched in {self.ui.Subject, self.ui.subject_list} and event.type() == QEvent.Type.Resize:
+            self._update_subject_vertical_widgets_layout()
+        return super().eventFilter(watched, event)
 
     def _build_task_tabs(self):
         self.notebook_tab = NotebookTabController(self.ui.todo_list)
@@ -541,7 +840,36 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(placeholder)
 
     def _sync_time_organizer(self):
-        self.time_organizer_tab.set_subject(self.selected_subject)
+        if self.selected_subject is None:
+            self.time_organizer_tab.set_subject(None)
+            return
+
+        planner_follows_subject = bool(
+            self.preferences.get("planner_follows_subject_selection", True)
+        )
+        timer_follows_subject = bool(
+            self.preferences.get("timer_follows_subject_selection", True)
+        )
+        current_timer_mode = getattr(self.time_organizer_tab, "selected_timer_mode", "pomodoro")
+        is_quiz_timer_mode = current_timer_mode in {"short_quiz", "long_quiz"}
+        has_time_manager_subject = bool(getattr(self.time_organizer_tab, "subject_name", None))
+
+        should_switch_subject = (
+            planner_follows_subject
+            or timer_follows_subject
+            or is_quiz_timer_mode
+            or not has_time_manager_subject
+        )
+        if not should_switch_subject:
+            return
+
+        preserve_timer_state = bool(
+            has_time_manager_subject and (is_quiz_timer_mode or not timer_follows_subject)
+        )
+        self.time_organizer_tab.set_subject(
+            self.selected_subject,
+            preserve_timer_state=preserve_timer_state,
+        )
 
     def _encode_byte_array(self, value: QByteArray) -> str:
         return bytes(value.toBase64()).decode("ascii")
@@ -633,10 +961,12 @@ class MainWindow(QMainWindow):
             return []
         leaf_paths: list[str] = []
         for chapter in subject.chapters:
+            leaf_paths.append(chapter.title)
             if chapter.subchapters:
-                leaf_paths.extend(self._chapter_path(chapter.title, subchapter) for subchapter in chapter.subchapters)
-            else:
-                leaf_paths.append(chapter.title)
+                leaf_paths.extend(
+                    self._chapter_path(chapter.title, subchapter)
+                    for subchapter in chapter.subchapters
+                )
         return leaf_paths
 
     def _selected_subject_chapters(self) -> list[str]:
@@ -841,29 +1171,37 @@ class MainWindow(QMainWindow):
         apply_hierarchical_font_to_item(item, level=0)  # Subject - largest font
         
         for chapter in subject.chapters:
-            child = QTreeWidgetItem([chapter.title])
-            child.setData(0, ITEM_KIND_ROLE, "chapter")
-            child.setData(0, SUBJECT_NAME_ROLE, subject.name)
-            child.setData(0, CHAPTER_NAME_ROLE, chapter.title)
-            apply_hierarchical_font_to_item(child, level=1)  # Chapter - medium font
-            
-            if chapter.subchapters:
-                for subchapter_name in chapter.subchapters:
-                    leaf_path = self._chapter_path(chapter.title, subchapter_name)
-                    grandchild = QTreeWidgetItem([subchapter_name])
-                    grandchild.setData(0, ITEM_KIND_ROLE, "subchapter")
-                    grandchild.setData(0, SUBJECT_NAME_ROLE, subject.name)
-                    grandchild.setData(0, CHAPTER_NAME_ROLE, subchapter_name)
-                    grandchild.setData(0, PARENT_CHAPTER_ROLE, chapter.title)
-                    grandchild.setData(0, LEAF_PATH_ROLE, leaf_path)
-                    apply_hierarchical_font_to_item(grandchild, level=2)  # Subchapter - smallest font
-                    child.addChild(grandchild)
-                child.setExpanded(True)
-            else:
-                child.setData(0, LEAF_PATH_ROLE, chapter.title)
-            item.addChild(child)
+            item.addChild(self._make_chapter_item(subject.name, chapter))
         item.setExpanded(True)
         return item
+
+    def _make_chapter_item(self, subject_name: str, chapter: ChapterRecord) -> QTreeWidgetItem:
+        child = QTreeWidgetItem([chapter.title])
+        child.setData(0, ITEM_KIND_ROLE, "chapter")
+        child.setData(0, SUBJECT_NAME_ROLE, subject_name)
+        child.setData(0, CHAPTER_NAME_ROLE, chapter.title)
+        child.setData(0, LEAF_PATH_ROLE, chapter.title)
+        apply_hierarchical_font_to_item(child, level=1)
+
+        if chapter.subchapters:
+            for subchapter_name in chapter.subchapters:
+                leaf_path = self._chapter_path(chapter.title, subchapter_name)
+                grandchild = QTreeWidgetItem([subchapter_name])
+                grandchild.setData(0, ITEM_KIND_ROLE, "subchapter")
+                grandchild.setData(0, SUBJECT_NAME_ROLE, subject_name)
+                grandchild.setData(0, CHAPTER_NAME_ROLE, subchapter_name)
+                grandchild.setData(0, PARENT_CHAPTER_ROLE, chapter.title)
+                grandchild.setData(0, LEAF_PATH_ROLE, leaf_path)
+                apply_hierarchical_font_to_item(grandchild, level=2)
+                child.addChild(grandchild)
+            child.setExpanded(True)
+        return child
+
+    def _server_glyph_for_subject(self, subject_name: str) -> str:
+        emoji = self.emoji_manager.get_emoji_for_subject(subject_name, use_monochrome=True)
+        if emoji:
+            return emoji
+        return subject_name[:1].upper() if subject_name else "?"
 
     def _rebuild_subject_tree(self):
         self.subject_tree.blockSignals(True)
@@ -871,6 +1209,93 @@ class MainWindow(QMainWindow):
         for subject in self.subjects:
             self.subject_tree.addTopLevelItem(self._make_subject_item(subject))
         self.subject_tree.blockSignals(False)
+        self._rebuild_subject_server_list()
+        self._refresh_subject_server_chapters()
+        if self.selected_subject:
+            self._set_current_tree_subject(self.selected_subject)
+
+    def _rebuild_subject_server_list(self):
+        if not hasattr(self, "subject_server_list"):
+            return
+        self.subject_server_list.blockSignals(True)
+        self.subject_server_list.clear()
+        for subject in self.subjects:
+            item = QListWidgetItem(self._server_glyph_for_subject(subject.name))
+            item.setData(SUBJECT_NAME_ROLE, subject.name)
+            item.setToolTip(get_subject_display_name(subject.name, self.emoji_manager, use_monochrome=True))
+            item.setTextAlignment(int(Qt.AlignmentFlag.AlignCenter))
+            item.setSizeHint(self._subject_vertical_slot_size())
+            item.setFont(self._subject_vertical_emoji_font())
+            self.subject_server_list.addItem(item)
+        self.subject_server_list.blockSignals(False)
+
+    def _refresh_subject_server_chapters(self):
+        if not hasattr(self, "subject_server_chapter_tree"):
+            return
+
+        subject = self._find_subject(self.selected_subject)
+        if subject is None:
+            self.subject_server_header_label.setText("Select a subject")
+            self.subject_server_chapter_tree.blockSignals(True)
+            self.subject_server_chapter_tree.clear()
+            self.subject_server_chapter_tree.blockSignals(False)
+            return
+
+        self.subject_server_header_label.setText(
+            get_subject_display_name(subject.name, self.emoji_manager, use_monochrome=True)
+        )
+        self.subject_server_chapter_tree.blockSignals(True)
+        self.subject_server_chapter_tree.clear()
+        for chapter in subject.chapters:
+            self.subject_server_chapter_tree.addTopLevelItem(
+                self._make_chapter_item(subject.name, chapter)
+            )
+        self.subject_server_chapter_tree.blockSignals(False)
+
+    def _find_server_subject_row(self, subject_name: str) -> int:
+        normalized = subject_name.strip().lower()
+        for index in range(self.subject_server_list.count()):
+            item = self.subject_server_list.item(index)
+            stored_name = item.data(SUBJECT_NAME_ROLE)
+            if isinstance(stored_name, str) and stored_name.lower() == normalized:
+                return index
+        return -1
+
+    def _set_current_server_subject(self, subject_name: str):
+        if not hasattr(self, "subject_server_list"):
+            return
+        row = self._find_server_subject_row(subject_name)
+        self.subject_server_list.blockSignals(True)
+        if row >= 0:
+            self.subject_server_list.setCurrentRow(row)
+        else:
+            self.subject_server_list.clearSelection()
+        self.subject_server_list.blockSignals(False)
+
+    def _find_subject_server_chapter_item(self, normalized_path: str) -> QTreeWidgetItem | None:
+        for index in range(self.subject_server_chapter_tree.topLevelItemCount()):
+            item = self.subject_server_chapter_tree.topLevelItem(index)
+            stored_path = item.data(0, LEAF_PATH_ROLE)
+            if isinstance(stored_path, str) and stored_path.lower() == normalized_path:
+                return item
+            for child_index in range(item.childCount()):
+                child = item.child(child_index)
+                stored_path = child.data(0, LEAF_PATH_ROLE)
+                if isinstance(stored_path, str) and stored_path.lower() == normalized_path:
+                    return child
+        return None
+
+    def _set_current_server_chapter(self, subject_name: str, chapter_name: str):
+        if not hasattr(self, "subject_server_chapter_tree"):
+            return
+        self._set_current_server_subject(subject_name)
+        if not self.selected_subject or self.selected_subject.lower() != subject_name.strip().lower():
+            self.selected_subject = subject_name
+            self._refresh_subject_server_chapters()
+        item = self._find_subject_server_chapter_item(chapter_name.strip().lower())
+        self.subject_server_chapter_tree.blockSignals(True)
+        self.subject_server_chapter_tree.setCurrentItem(item)
+        self.subject_server_chapter_tree.blockSignals(False)
 
     def _find_subject_item(self, subject_name: str) -> QTreeWidgetItem | None:
         normalized = subject_name.strip().lower()
@@ -883,8 +1308,6 @@ class MainWindow(QMainWindow):
 
     def _set_current_tree_subject(self, subject_name: str):
         item = self._find_subject_item(subject_name)
-        if item is None:
-            return
         self.subject_tree.blockSignals(True)
         self.subject_tree.setCurrentItem(item)
         self.subject_tree.blockSignals(False)
@@ -892,6 +1315,7 @@ class MainWindow(QMainWindow):
     def _set_current_tree_chapter(self, subject_name: str, chapter_name: str):
         subject_item = self._find_subject_item(subject_name)
         if subject_item is None:
+            self._set_current_server_chapter(subject_name, chapter_name)
             return
 
         normalized = chapter_name.strip().lower()
@@ -902,6 +1326,7 @@ class MainWindow(QMainWindow):
                 self.subject_tree.blockSignals(True)
                 self.subject_tree.setCurrentItem(child)
                 self.subject_tree.blockSignals(False)
+                self._set_current_server_chapter(subject_name, chapter_name)
                 return
             for sub_index in range(child.childCount()):
                 grandchild = child.child(sub_index)
@@ -910,7 +1335,9 @@ class MainWindow(QMainWindow):
                     self.subject_tree.blockSignals(True)
                     self.subject_tree.setCurrentItem(grandchild)
                     self.subject_tree.blockSignals(False)
+                    self._set_current_server_chapter(subject_name, chapter_name)
                     return
+        self._set_current_server_chapter(subject_name, chapter_name)
 
     def _show_first_time_setup(self):
         """Show first-time setup wizard to configure data path."""
@@ -1256,7 +1683,7 @@ class MainWindow(QMainWindow):
         if save:
             self._save_subjects()
 
-        self.select_subject(subject.name, update_tree=False)
+        self.select_subject(subject.name, update_tree=False, force_refresh=True)
         self._set_current_tree_chapter(subject.name, normalized)
         return True
 
@@ -1319,22 +1746,13 @@ class MainWindow(QMainWindow):
                 QMessageBox.information(self, "Duplicate Subchapter", "That subchapter already exists.")
             return False
 
-        if not chapter.subchapters and self._leaf_has_saved_content(subject.name, chapter.title):
-            if show_errors:
-                QMessageBox.warning(
-                    self,
-                    "Cannot Add Subchapter",
-                    "This chapter already has notebook or quiz content as a leaf. Rename or reorganize that content first.",
-                )
-            return False
-
         chapter.subchapters.append(normalized)
         self._rebuild_subject_tree()
 
         if save:
             self._save_subjects()
 
-        self.select_subject(subject.name, update_tree=False)
+        self.select_subject(subject.name, update_tree=False, force_refresh=True)
         self._set_current_tree_chapter(subject.name, new_leaf_path)
         return True
 
@@ -1694,7 +2112,7 @@ class MainWindow(QMainWindow):
             self._save_subjects()
 
         if self.selected_subject and self.selected_subject.lower() == subject.name.lower():
-            self.select_subject(subject.name, update_tree=False)
+            self.select_subject(subject.name, update_tree=False, force_refresh=True)
             if chapter.subchapters:
                 self._set_current_tree_subject(subject.name)
             else:
@@ -1708,9 +2126,7 @@ class MainWindow(QMainWindow):
         return True
 
     def _leaf_paths_for_chapter(self, chapter: ChapterRecord) -> list[str]:
-        if chapter.subchapters:
-            return [self._chapter_path(chapter.title, subchapter) for subchapter in chapter.subchapters]
-        return [chapter.title]
+        return self._subject_leaf_paths(SubjectRecord(name="", chapters=[chapter]))
 
     def _rename_subchapter(
         self,
@@ -1762,7 +2178,7 @@ class MainWindow(QMainWindow):
             self._save_subjects()
 
         if self.selected_subject and self.selected_subject.lower() == subject.name.lower():
-            self.select_subject(subject.name, update_tree=False)
+            self.select_subject(subject.name, update_tree=False, force_refresh=True)
             self._set_current_tree_chapter(subject.name, new_leaf_path)
             active_chapter_tab = self._active_chapter_tab()
             if active_chapter_tab is not None:
@@ -1852,7 +2268,7 @@ class MainWindow(QMainWindow):
             self._save_subjects()
 
         if self.selected_subject and self.selected_subject.lower() == subject.name.lower():
-            self.select_subject(subject.name, update_tree=False)
+            self.select_subject(subject.name, update_tree=False, force_refresh=True)
             if subject.chapters:
                 next_index = min(chapter_index, len(subject.chapters) - 1)
                 next_chapter = subject.chapters[next_index]
@@ -1899,7 +2315,7 @@ class MainWindow(QMainWindow):
         if save:
             self._save_subjects()
 
-        self.select_subject(subject.name, update_tree=False)
+        self.select_subject(subject.name, update_tree=False, force_refresh=True)
         if chapter.subchapters:
             next_index = min(subchapter_index, len(chapter.subchapters) - 1)
             next_leaf = self._chapter_path(chapter.title, chapter.subchapters[next_index])
@@ -2017,11 +2433,93 @@ class MainWindow(QMainWindow):
             self._set_current_tree_chapter(subject.name, self._chapter_path(chapter.title, subchapter_name))
         return True
 
+    def _show_subject_menu_for_name(self, subject_name: str, global_position, parent_widget: QWidget):
+        menu = QMenu(parent_widget)
+        add_chapter_action = menu.addAction("Add Chapter...")
+        rename_subject_action = menu.addAction("Rename Subject...")
+        delete_subject_action = menu.addAction("Delete Subject...")
+        chosen = menu.exec(global_position)
+        if chosen == add_chapter_action:
+            self.prompt_add_chapter(subject_name)
+        elif chosen == rename_subject_action:
+            self.prompt_rename_subject(subject_name)
+        elif chosen == delete_subject_action:
+            self._delete_subject(subject_name)
+
+    def _show_chapter_menu_for_name(self, subject_name: str, chapter_name: str, global_position, parent_widget: QWidget):
+        menu = QMenu(parent_widget)
+        subject = self._find_subject(subject_name)
+        chapter_index = -1
+        if subject is not None:
+            chapter_index = next(
+                (index for index, ch in enumerate(subject.chapters) if ch.title.lower() == chapter_name.strip().lower()),
+                -1,
+            )
+
+        add_subchapter_action = menu.addAction("Add Subchapter...")
+        move_up_action = menu.addAction("Move Up")
+        move_up_action.setEnabled(chapter_index > 0)
+        move_down_action = menu.addAction("Move Down")
+        move_down_action.setEnabled(
+            chapter_index >= 0 and chapter_index < (len(subject.chapters) - 1) if subject else False
+        )
+        menu.addSeparator()
+        rename_chapter_action = menu.addAction("Rename Chapter...")
+        delete_chapter_action = menu.addAction("Delete Chapter...")
+        chosen = menu.exec(global_position)
+        if chosen == add_subchapter_action:
+            self.prompt_add_subchapter(subject_name, chapter_name)
+        elif chosen == move_up_action:
+            self._move_chapter_up(subject_name, chapter_name)
+        elif chosen == move_down_action:
+            self._move_chapter_down(subject_name, chapter_name)
+        elif chosen == rename_chapter_action:
+            self.prompt_rename_chapter(subject_name, chapter_name)
+        elif chosen == delete_chapter_action:
+            self._delete_chapter(subject_name, chapter_name)
+
+    def _show_subchapter_menu_for_name(
+        self,
+        subject_name: str,
+        chapter_name: str,
+        subchapter_name: str,
+        global_position,
+        parent_widget: QWidget,
+    ):
+        menu = QMenu(parent_widget)
+        subject = self._find_subject(subject_name)
+        chapter = self._find_chapter_record(subject, chapter_name)
+        subchapter_index = -1
+        if chapter is not None:
+            subchapter_index = next(
+                (index for index, ch in enumerate(chapter.subchapters) if ch.lower() == subchapter_name.strip().lower()),
+                -1,
+            )
+
+        move_up_action = menu.addAction("Move Up")
+        move_up_action.setEnabled(subchapter_index > 0)
+        move_down_action = menu.addAction("Move Down")
+        move_down_action.setEnabled(
+            subchapter_index >= 0 and chapter is not None and subchapter_index < (len(chapter.subchapters) - 1)
+        )
+        menu.addSeparator()
+        rename_subchapter_action = menu.addAction("Rename Subchapter...")
+        delete_subchapter_action = menu.addAction("Delete Subchapter...")
+
+        chosen = menu.exec(global_position)
+        if chosen == move_up_action:
+            self._move_subchapter_up(subject_name, chapter_name, subchapter_name)
+        elif chosen == move_down_action:
+            self._move_subchapter_down(subject_name, chapter_name, subchapter_name)
+        elif chosen == rename_subchapter_action:
+            self.prompt_rename_chapter(subject_name, subchapter_name, parent_chapter_name=chapter_name)
+        elif chosen == delete_subchapter_action:
+            self._delete_subchapter(subject_name, chapter_name, subchapter_name)
+
     def show_subject_context_menu(self, position):
         item = self.subject_tree.itemAt(position)
-        menu = QMenu(self.subject_tree)
-
         if item is None:
+            menu = QMenu(self.subject_tree)
             add_subject_action = menu.addAction("Add Subject...")
             chosen = menu.exec(self.subject_tree.viewport().mapToGlobal(position))
             if chosen == add_subject_action:
@@ -2029,81 +2527,81 @@ class MainWindow(QMainWindow):
             return
 
         item_kind = item.data(0, ITEM_KIND_ROLE)
-        if item_kind == "subject":
-            subject_name = item.data(0, SUBJECT_NAME_ROLE)
-            add_chapter_action = menu.addAction("Add Chapter...")
-            rename_subject_action = menu.addAction("Rename Subject...")
-            delete_subject_action = menu.addAction("Delete Subject...")
-            chosen = menu.exec(self.subject_tree.viewport().mapToGlobal(position))
-            if chosen == add_chapter_action and isinstance(subject_name, str):
-                self.prompt_add_chapter(subject_name)
-            elif chosen == rename_subject_action and isinstance(subject_name, str):
-                self.prompt_rename_subject(subject_name)
-            elif chosen == delete_subject_action and isinstance(subject_name, str):
-                self._delete_subject(subject_name)
-        elif item_kind == "chapter":
-            subject_name = item.data(0, SUBJECT_NAME_ROLE)
+        subject_name = item.data(0, SUBJECT_NAME_ROLE)
+        global_position = self.subject_tree.viewport().mapToGlobal(position)
+        if item_kind == "subject" and isinstance(subject_name, str):
+            self._show_subject_menu_for_name(subject_name, global_position, self.subject_tree)
+        elif item_kind == "chapter" and isinstance(subject_name, str):
             chapter_name = item.data(0, CHAPTER_NAME_ROLE)
-            subject = self._find_subject(subject_name) if isinstance(subject_name, str) else None
-            chapter_index = -1
-            if subject is not None and isinstance(chapter_name, str):
-                chapter_index = next(
-                    (index for index, ch in enumerate(subject.chapters) if ch.title.lower() == chapter_name.strip().lower()),
-                    -1,
+            if isinstance(chapter_name, str):
+                self._show_chapter_menu_for_name(
+                    subject_name,
+                    chapter_name,
+                    global_position,
+                    self.subject_tree,
                 )
-
-            add_subchapter_action = menu.addAction("Add Subchapter...")
-            move_up_action = menu.addAction("Move Up")
-            move_up_action.setEnabled(chapter_index > 0)
-            move_down_action = menu.addAction("Move Down")
-            move_down_action.setEnabled(chapter_index >= 0 and chapter_index < (len(subject.chapters) - 1) if subject else False)
-            menu.addSeparator()
-            rename_chapter_action = menu.addAction("Rename Chapter...")
-            delete_chapter_action = menu.addAction("Delete Chapter...")
-            
-            chosen = menu.exec(self.subject_tree.viewport().mapToGlobal(position))
-            if chosen == add_subchapter_action and isinstance(subject_name, str) and isinstance(chapter_name, str):
-                self.prompt_add_subchapter(subject_name, chapter_name)
-            elif chosen == move_up_action and isinstance(subject_name, str) and isinstance(chapter_name, str):
-                self._move_chapter_up(subject_name, chapter_name)
-            elif chosen == move_down_action and isinstance(subject_name, str) and isinstance(chapter_name, str):
-                self._move_chapter_down(subject_name, chapter_name)
-            elif chosen == rename_chapter_action and isinstance(subject_name, str) and isinstance(chapter_name, str):
-                self.prompt_rename_chapter(subject_name, chapter_name)
-            elif chosen == delete_chapter_action and isinstance(subject_name, str) and isinstance(chapter_name, str):
-                self._delete_chapter(subject_name, chapter_name)
-        elif item_kind == "subchapter":
-            subject_name = item.data(0, SUBJECT_NAME_ROLE)
+        elif item_kind == "subchapter" and isinstance(subject_name, str):
             chapter_name = item.data(0, PARENT_CHAPTER_ROLE)
             subchapter_name = item.data(0, CHAPTER_NAME_ROLE)
-            subject = self._find_subject(subject_name) if isinstance(subject_name, str) else None
-            chapter = self._find_chapter_record(subject, chapter_name) if isinstance(chapter_name, str) else None
-            subchapter_index = -1
-            if chapter is not None and isinstance(subchapter_name, str):
-                subchapter_index = next(
-                    (index for index, ch in enumerate(chapter.subchapters) if ch.lower() == subchapter_name.strip().lower()),
-                    -1,
+            if isinstance(chapter_name, str) and isinstance(subchapter_name, str):
+                self._show_subchapter_menu_for_name(
+                    subject_name,
+                    chapter_name,
+                    subchapter_name,
+                    global_position,
+                    self.subject_tree,
                 )
 
-            move_up_action = menu.addAction("Move Up")
-            move_up_action.setEnabled(subchapter_index > 0)
-            move_down_action = menu.addAction("Move Down")
-            move_down_action.setEnabled(
-                subchapter_index >= 0 and chapter is not None and subchapter_index < (len(chapter.subchapters) - 1)
+    def _show_subject_server_context_menu(self, position):
+        item = self.subject_server_list.itemAt(position)
+        if item is None:
+            menu = QMenu(self.subject_server_list)
+            add_subject_action = menu.addAction("Add Subject...")
+            chosen = menu.exec(self.subject_server_list.viewport().mapToGlobal(position))
+            if chosen == add_subject_action:
+                self.prompt_add_subject()
+            return
+        subject_name = item.data(SUBJECT_NAME_ROLE)
+        if isinstance(subject_name, str):
+            self._show_subject_menu_for_name(
+                subject_name,
+                self.subject_server_list.viewport().mapToGlobal(position),
+                self.subject_server_list,
             )
-            menu.addSeparator()
-            rename_subchapter_action = menu.addAction("Rename Subchapter...")
-            delete_subchapter_action = menu.addAction("Delete Subchapter...")
 
-            chosen = menu.exec(self.subject_tree.viewport().mapToGlobal(position))
-            if chosen == move_up_action and isinstance(subject_name, str) and isinstance(chapter_name, str) and isinstance(subchapter_name, str):
-                self._move_subchapter_up(subject_name, chapter_name, subchapter_name)
-            elif chosen == move_down_action and isinstance(subject_name, str) and isinstance(chapter_name, str) and isinstance(subchapter_name, str):
-                self._move_subchapter_down(subject_name, chapter_name, subchapter_name)
-            elif chosen == rename_subchapter_action and isinstance(subject_name, str) and isinstance(chapter_name, str) and isinstance(subchapter_name, str):
-                self.prompt_rename_chapter(subject_name, subchapter_name, parent_chapter_name=chapter_name)
-            elif chosen == delete_subchapter_action and isinstance(subject_name, str) and isinstance(chapter_name, str) and isinstance(subchapter_name, str):
-                self._delete_subchapter(subject_name, chapter_name, subchapter_name)
+    def _show_subject_server_chapter_context_menu(self, position):
+        item = self.subject_server_chapter_tree.itemAt(position)
+        global_position = self.subject_server_chapter_tree.viewport().mapToGlobal(position)
+        if item is None:
+            if isinstance(self.selected_subject, str):
+                menu = QMenu(self.subject_server_chapter_tree)
+                add_chapter_action = menu.addAction("Add Chapter...")
+                chosen = menu.exec(global_position)
+                if chosen == add_chapter_action:
+                    self.prompt_add_chapter(self.selected_subject)
+            return
+        item_kind = item.data(0, ITEM_KIND_ROLE)
+        subject_name = item.data(0, SUBJECT_NAME_ROLE)
+        if item_kind == "chapter" and isinstance(subject_name, str):
+            chapter_name = item.data(0, CHAPTER_NAME_ROLE)
+            if isinstance(chapter_name, str):
+                self._show_chapter_menu_for_name(
+                    subject_name,
+                    chapter_name,
+                    global_position,
+                    self.subject_server_chapter_tree,
+                )
+        elif item_kind == "subchapter" and isinstance(subject_name, str):
+            chapter_name = item.data(0, PARENT_CHAPTER_ROLE)
+            subchapter_name = item.data(0, CHAPTER_NAME_ROLE)
+            if isinstance(chapter_name, str) and isinstance(subchapter_name, str):
+                self._show_subchapter_menu_for_name(
+                    subject_name,
+                    chapter_name,
+                    subchapter_name,
+                    global_position,
+                    self.subject_server_chapter_tree,
+                )
 
     def _active_chapter_tab(self):
         current_widget = self.ui.TaskTabs.currentWidget()
@@ -2131,24 +2629,60 @@ class MainWindow(QMainWindow):
         if not isinstance(leaf_path, str):
             return
 
+        self._set_current_server_chapter(subject_name, leaf_path)
         active_chapter_tab = self._active_chapter_tab()
         if active_chapter_tab is not None:
             active_chapter_tab.focus_chapter(leaf_path)
 
-    def select_subject(self, subject_name, *, update_tree=True):
+    def _on_subject_server_selection_changed(self):
+        current_item = self.subject_server_list.currentItem()
+        if current_item is None:
+            return
+        subject_name = current_item.data(SUBJECT_NAME_ROLE)
+        if not isinstance(subject_name, str):
+            return
+        self.select_subject(subject_name, update_tree=False)
+
+    def _on_subject_server_chapter_selection_changed(self):
+        current_item = self.subject_server_chapter_tree.currentItem()
+        if current_item is None:
+            return
+
+        subject_name = current_item.data(0, SUBJECT_NAME_ROLE)
+        if isinstance(subject_name, str):
+            self.select_subject(subject_name, update_tree=False)
+
+        leaf_path = current_item.data(0, LEAF_PATH_ROLE)
+        if not isinstance(leaf_path, str):
+            return
+
+        if isinstance(subject_name, str):
+            self._set_current_tree_chapter(subject_name, leaf_path)
+        active_chapter_tab = self._active_chapter_tab()
+        if active_chapter_tab is not None:
+            active_chapter_tab.focus_chapter(leaf_path)
+
+    def select_subject(self, subject_name, *, update_tree=True, force_refresh=False):
         subject = self._find_subject(subject_name)
         if subject is None:
             return
 
+        subject_changed = (
+            not isinstance(self.selected_subject, str)
+            or self.selected_subject.lower() != subject.name.lower()
+        )
         self.selected_subject = subject.name
 
-        if update_tree:
-            self._set_current_tree_subject(subject.name)
+        self._set_current_tree_subject(subject.name)
+        self._set_current_server_subject(subject.name)
+        if subject_changed or force_refresh:
+            self._refresh_subject_server_chapters()
 
         self._refresh_subject_views()
-        self._sync_task_tabs()
-        self._sync_time_organizer()
-        self._save_subjects()
+        if subject_changed or force_refresh:
+            self._sync_task_tabs()
+            self._sync_time_organizer()
+            self._save_subjects()
 
     def _refresh_subject_views(self):
         self.setWindowTitle(
@@ -2159,36 +2693,90 @@ class MainWindow(QMainWindow):
 
     def show_preferences_dialog(self):
         """Show preferences dialog with option to change data path."""
-        dialog = QMessageBox(self)
-        dialog.setWindowTitle("Preferences")
-        dialog.setIcon(QMessageBox.Icon.Information)
-        
         current_path = self.preferences.get("custom_data_path") or str(self.app_state_dir)
-        
-        dialog.setText(
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Preferences")
+        layout = QVBoxLayout(dialog)
+
+        info_label = QLabel(
             f"<b>Data Storage Location:</b><br>{current_path}<br><br>"
             f"<b>Preferences file:</b><br>{self.preferences_path}<br><br>"
             f"<b>Subjects & chapters:</b><br>{self.subject_store_path}<br><br>"
             f"<b>Window layout:</b><br>{self.app_state_path}"
         )
-        
-        # Add buttons
-        change_path_btn = dialog.addButton("Change Data Path", QMessageBox.ButtonRole.ActionRole)
-        emoji_btn = dialog.addButton("Manage Subject Emoji", QMessageBox.ButtonRole.ActionRole)
-        open_folder_btn = dialog.addButton("Open Folder", QMessageBox.ButtonRole.ActionRole)
-        close_btn = dialog.addButton(QMessageBox.StandardButton.Close)
-        
-        clicked = dialog.exec()
-        
-        if dialog.clickedButton() == emoji_btn:
-            self.show_emoji_dialog()
-        
-        
-        if dialog.clickedButton() == change_path_btn:
-            self._show_change_data_path_dialog()
-        elif dialog.clickedButton() == open_folder_btn:
-            # Open the data folder in file explorer
-            self._open_data_folder()
+        info_label.setWordWrap(True)
+        layout.addWidget(info_label)
+
+        sync_frame = QFrame(dialog)
+        sync_layout = QFormLayout(sync_frame)
+        sync_layout.setContentsMargins(0, 0, 0, 0)
+
+        timer_sync_checkbox = QCheckBox("Keep timer synced with subject selection", sync_frame)
+        timer_sync_checkbox.setChecked(
+            bool(self.preferences.get("timer_follows_subject_selection", True))
+        )
+        planner_sync_checkbox = QCheckBox(
+            "Keep Gantt, Calendar, and Activity Overview synced with subject selection",
+            sync_frame,
+        )
+        planner_sync_checkbox.setChecked(
+            bool(self.preferences.get("planner_follows_subject_selection", True))
+        )
+        subject_navigation_combo = QComboBox(sync_frame)
+        subject_navigation_combo.addItem("Tree", "tree")
+        subject_navigation_combo.addItem("Vertical Widgets", "vertical_widgets")
+        subject_navigation_index = subject_navigation_combo.findData(self._subject_navigation_style())
+        subject_navigation_combo.setCurrentIndex(subject_navigation_index if subject_navigation_index >= 0 else 0)
+
+        sync_layout.addRow("Timer", timer_sync_checkbox)
+        sync_layout.addRow("Planner", planner_sync_checkbox)
+        sync_layout.addRow("Subjects", subject_navigation_combo)
+        layout.addWidget(sync_frame)
+
+        action_row = QHBoxLayout()
+        change_path_btn = QPushButton("Change Data Path", dialog)
+        emoji_btn = QPushButton("Manage Subject Emoji", dialog)
+        open_folder_btn = QPushButton("Open Folder", dialog)
+        action_row.addWidget(change_path_btn)
+        action_row.addWidget(emoji_btn)
+        action_row.addWidget(open_folder_btn)
+        action_row.addStretch(1)
+        layout.addLayout(action_row)
+
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+            dialog,
+        )
+        layout.addWidget(button_box)
+
+        change_path_btn.clicked.connect(self._show_change_data_path_dialog)
+        emoji_btn.clicked.connect(self.show_emoji_dialog)
+        open_folder_btn.clicked.connect(self._open_data_folder)
+        button_box.accepted.connect(dialog.accept)
+        button_box.rejected.connect(dialog.reject)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        previous_timer_sync = bool(self.preferences.get("timer_follows_subject_selection", True))
+        previous_planner_sync = bool(self.preferences.get("planner_follows_subject_selection", True))
+        previous_subject_navigation_style = self._subject_navigation_style()
+        self.preferences["timer_follows_subject_selection"] = timer_sync_checkbox.isChecked()
+        self.preferences["planner_follows_subject_selection"] = planner_sync_checkbox.isChecked()
+        self.preferences["subject_navigation_style"] = str(subject_navigation_combo.currentData())
+        self._save_preferences()
+        if previous_subject_navigation_style != self._subject_navigation_style():
+            self._apply_subject_navigation_mode()
+
+        if (
+            self.selected_subject
+            and (
+                previous_timer_sync != timer_sync_checkbox.isChecked()
+                or previous_planner_sync != planner_sync_checkbox.isChecked()
+            )
+        ):
+            self._sync_time_organizer()
 
     def show_emoji_dialog(self):
         """Show dialog for managing subject emoji assignments."""
