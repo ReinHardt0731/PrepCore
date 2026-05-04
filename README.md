@@ -1,41 +1,66 @@
-# PrepCore
+# PrepCore - Board Exam Preparation Application
 
-PrepCore is a desktop board-exam study app built with PySide6.
+## Directory Structure
 
-## Structure
-
-```text
+```
 PrepCore/
-├── src/
-│   ├── main.py
-│   ├── app/
-│   └── modules/
-├── tests/
-├── assets/
-├── docs/
-├── scripts/
-├── build/
-├── dist/
-├── .gitignore
-├── README.md
-└── requirements.txt
+├── bin/                    # Application executable
+│   └── PrepCore.exe       # Main application launcher
+├── assets/                # Runtime assets (libraries, icons, sounds, data)
+├── config/                # Configuration files (for future use)
+├── docs/                  # Documentation
+├── scripts/               # Utility scripts
+├── logs/                  # Application logs
+├── temp/                  # Temporary files
+├── tests/                 # Test files
+└── README.md             # This file
 ```
 
-## Run
+## Quick Start
 
-```bash
-python main.py
+1. Double-click `bin/PrepCore.exe` to launch the application
+2. On first launch, the app will start blank
+3. Add subjects and chapters through the UI
+4. Import quiz banks and create study plans
+
+## Features
+
+- 📚 **Subject Management**: Organize studies by subject and chapter
+- 🎯 **Multiple Quiz Types**: Long quizzes, short quizzes, and notebooks
+- ⏱️ **Time Management**: Gantt charts, calendar, and Pomodoro timer
+- 🎨 **Modern UI**: Midnight blue theme with intuitive design
+- 💾 **Data Persistence**: All progress saved locally
+
+## First-Run Setup
+
+When you first launch PrepCore:
+- The application starts with no pre-loaded subjects
+- Create subjects and add chapters manually, or use the Import feature
+- Your data is saved in: `%APPDATA%/Local/PrepCore/`
+
+## System Requirements
+
+- Windows 7 or later
+- No additional software required (all dependencies bundled)
+
+## Support
+
+For issues or questions, refer to the documentation in the `docs/` folder.
+
+## Data Storage
+
+User data is automatically saved to:
+```
+%APPDATA%\Local\PrepCore\
+├── subjects.json         # Your subjects and chapters
+├── preferences.json      # App preferences
+└── window_state.json     # Window size and position
 ```
 
-or
+## Files Included
 
-```bash
-python src/main.py
-```
-
-## Notes
-
-- Source code now lives under `src/`.
-- Static resources live under `assets/`.
-- Build and packaging helpers live under `scripts/`.
-- Older project notes and build docs were moved under `docs/`.
+The `assets/` folder contains:
+- Application runtime libraries
+- Icons and images
+- Alarm sound for timer notifications
+- Configuration schemas
