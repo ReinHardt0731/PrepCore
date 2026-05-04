@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PrepCore Download</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="page-shell">
+        <header class="hero">
+            <div class="hero-copy">
+                <p class="eyebrow">PrepCore Desktop</p>
+                <h1>Download the latest Windows build in one click.</h1>
+                <p class="lede">
+                    This page is a lightweight launcher for the packaged app. It points directly
+                    to the current build output in <code>dist/PrepCore.exe</code>.
+                </p>
+                <div class="hero-actions">
+                    <a id="download-link" class="download-button" href="../dist/PrepCore.exe" download="PrepCore.exe">
+                        Download PrepCore.exe
+                    </a>
+                </div>
+                <p id="status-text" class="status-text">Ready to download the current build.</p>
+            </div>
+            <div class="hero-card">
+                <img src="../assets/images/Logo_rounded.png" alt="PrepCore logo" class="app-logo">
+                <div class="build-badge">Version 1.0</div>
+                <ul class="feature-list">
+                    <li>Single-file Windows executable</li>
+                    <li>No install wizard required</li>
+                    <li>Built from the current <code>dist</code> output</li>
+                </ul>
+            </div>
+        </header>
+
+        <main class="content-grid">
+            <section class="showcase-panel wide">
+                <div class="showcase-header">
+                    <p class="eyebrow">Feature Tour</p>
+                    <h2>PrepCore: Plan, Study, Succeed.</h2>
+                    <p class="showcase-lede">
+                        A quick visual pass through the study tools, quiz builders, flashcards,
+                        schedules, and workspace customization inside the app.
+                    </p>
+                </div>
+
+                <div class="carousel-shell">
+                    <div class="carousel-controls">
+                        <button id="carousel-prev" class="carousel-arrow" type="button" aria-label="Previous screenshot">
+                            &#8249;
+                        </button>
+                        <button id="carousel-next" class="carousel-arrow" type="button" aria-label="Next screenshot">
+                            &#8250;
+                        </button>
+                    </div>
+                    <div class="carousel-track" id="feature-carousel">
+                    <article class="gallery-card">
+                        <img src="../assets/images/screenshots/gantchart.png" alt="PrepCore gantt chart planner">
+                        <div class="gallery-copy">
+                            <h3>Plan long study arcs</h3>
+                            <p>Turn review sessions, deadlines, and exam prep into a visual timeline.</p>
+                        </div>
+                    </article>
+
+                    <article class="gallery-card">
+                        <img src="../assets/images/screenshots/Manage%20your%20time%20(calendar.png" alt="PrepCore calendar view">
+                        <div class="gallery-copy">
+                            <h3>Manage your time</h3>
+                            <p>Use the calendar layout to map study blocks and keep momentum visible.</p>
+                        </div>
+                    </article>
+
+                    <article class="gallery-card">
+                        <img src="../assets/images/screenshots/Make%20Quiz.png" alt="PrepCore quiz creation screen">
+                        <div class="gallery-copy">
+                            <h3>Build your own quizzes</h3>
+                            <p>Create targeted practice sets around the exact topics you need to drill.</p>
+                        </div>
+                    </article>
+
+                    <article class="gallery-card">
+                        <img src="../assets/images/screenshots/Asses%20Yourself.png" alt="PrepCore self assessment tools">
+                        <div class="gallery-copy">
+                            <h3>Assess yourself clearly</h3>
+                            <p>Review weak spots fast and keep your practice grounded in real feedback.</p>
+                        </div>
+                    </article>
+
+                    <article class="gallery-card">
+                        <img src="../assets/images/screenshots/Create%20Flashcards.png" alt="PrepCore flashcard creation view">
+                        <div class="gallery-copy">
+                            <h3>Create flashcards quickly</h3>
+                            <p>Convert notes into bite-sized recall prompts without leaving the workspace.</p>
+                        </div>
+                    </article>
+
+                    <article class="gallery-card">
+                        <img src="../assets/images/screenshots/Flashcards.png" alt="PrepCore flashcard review mode">
+                        <div class="gallery-copy">
+                            <h3>Study in flashcard mode</h3>
+                            <p>Switch from building material to memorizing it with a cleaner focused view.</p>
+                        </div>
+                    </article>
+
+                    <article class="gallery-card">
+                        <img src="../assets/images/screenshots/Customize%20WIndows.png" alt="PrepCore customizable windows">
+                        <div class="gallery-copy">
+                            <h3>Customize your workspace</h3>
+                            <p>Arrange windows and panels into a setup that matches how you actually study.</p>
+                        </div>
+                    </article>
+                    </div>
+
+                    <div class="carousel-footer">
+                        <p class="swipe-hint">Swipe, drag, or trackpad-scroll to explore the screenshots.</p>
+                        <div class="carousel-dots" id="carousel-dots" aria-label="Screenshot navigation"></div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
