@@ -91,7 +91,7 @@ h1 {
 }
 
 .download-button,
-.secondary-button {
+.github-button {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -112,14 +112,14 @@ h1 {
     box-shadow: 0 18px 36px rgba(255, 209, 102, 0.26);
 }
 
-.secondary-button {
+.github-button {
     color: var(--text);
-    background: rgba(255, 255, 255, 0.04);
-    border-color: var(--line);
+    background: rgba(255, 255, 255, 0.05);
+    border-color: rgba(97, 195, 255, 0.24);
 }
 
 .download-button:hover,
-.secondary-button:hover {
+.github-button:hover {
     transform: translateY(-2px);
 }
 
@@ -141,10 +141,10 @@ h1 {
 }
 
 .app-logo {
-    width: 108px;
-    height: 108px;
+    width: 300px;
+    height: 300px;
     object-fit: cover;
-    border-radius: 28px;
+    border-radius: 34px;
     box-shadow: 0 18px 44px rgba(0, 0, 0, 0.35);
 }
 
