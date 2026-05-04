@@ -207,11 +207,6 @@ class MainWindow(QMainWindow):
             self.short_quiz_tab.set_storage_root(self._quiz_banks_root())
         if hasattr(self, "long_quiz_tab"):
             self.long_quiz_tab.set_storage_root(self._quiz_banks_root())
-        if hasattr(self, "assessment_tab"):
-            self.assessment_tab.set_storage_roots(
-                results_root=self._time_organizer_root(),
-                quiz_bank_root=self._quiz_banks_root(),
-            )
         if hasattr(self, "time_organizer_tab"):
             self.time_organizer_tab.set_storage_root(self._time_organizer_root())
 
@@ -404,7 +399,7 @@ class MainWindow(QMainWindow):
 
         self.subject_vertical_rail_width = 92
         self.subject_vertical_button_size = 64
-        self.subject_vertical_emoji_font_size =20
+        self.subject_vertical_emoji_font_size =25
         self.subject_vertical_compact_width = 94
         self.subject_vertical_compact_threshold = 220
         self._subject_vertical_compact_active = False
