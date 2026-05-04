@@ -4,6 +4,7 @@ import base64
 import html
 import json
 import mimetypes
+import os
 import shutil
 import subprocess
 import time
@@ -1976,18 +1977,47 @@ class NotebookTabController(QObject):
         cleaned = []
         for ch in value.lower():
             if ch.isalnum():
+                # ASCII letters and digits
                 cleaned.append(ch)
             elif ord(ch) > 127:
                 # Preserve emoji and other Unicode symbols
                 category = unicodedata.category(ch)
+                if category[0] in ('L', 'N', 'S', 'P') or category in ('Po', 'Pc'):
+                    # Keep letters, numbers, symbols, and punctuation (including emoji)
+                    cleaned.append(ch)
+                else:
+                    cleaned.append('_')
+            elif ch in ('-', '_', '.'):
+                # Keep safe punctuation
+                cleaned.append(ch)
+            else:
+                cleaned.append('_')
+        
+        slug = ''.join(cleaned)
+        while '__' in slug:
+            slug = slug.replace('__', '_')
+        return slug.strip('_.-') or 'subject'
+
+    def _legacy_slugify_subject(self, value: str) -> str:
+        value = value.strip()
+        if not value:
+            return "subject"
+
+        import unicodedata
+
+        cleaned: list[str] = []
+        for ch in value.lower():
+            if ch.isalnum():
+                cleaned.append(ch)
+            elif ord(ch) > 127:
+                category = unicodedata.category(ch)
                 if category[0] in ('L', 'N', 'S', 'P'):
-                    # Keep letters, numbers, symbols (including emoji), and punctuation
                     cleaned.append(ch)
                 else:
                     cleaned.append('_')
             else:
                 cleaned.append('_')
-        
+
         slug = ''.join(cleaned)
         while '__' in slug:
             slug = slug.replace('__', '_')
@@ -1997,20 +2027,32 @@ class NotebookTabController(QObject):
     def _subject_file_path(self, subject_name: str) -> Path:
         return self.storage_root / f"{self._slugify_subject(subject_name)}.json"
 
+    def _subject_file_candidates(self, subject_name: str) -> list[Path]:
+        primary = self._subject_file_path(subject_name)
+        candidates = [primary]
+        legacy = self.storage_root / f"{self._legacy_slugify_subject(subject_name)}.json"
+        if legacy != primary:
+            candidates.append(legacy)
+        return candidates
+
     def _load_subject_payload(self, subject_name: str):
         payload = {
             "subject": subject_name,
             "selected_chapter": None,
             "notes": {},
         }
-        subject_file = self._subject_file_path(subject_name)
-        if not subject_file.exists():
-            return payload
+        loaded = None
+        for subject_file in self._subject_file_candidates(subject_name):
+            if not subject_file.exists():
+                continue
+            try:
+                with subject_file.open("r", encoding="utf-8") as handle:
+                    loaded = json.load(handle)
+                break
+            except (OSError, json.JSONDecodeError):
+                continue
 
-        try:
-            with subject_file.open("r", encoding="utf-8") as handle:
-                loaded = json.load(handle)
-        except (OSError, json.JSONDecodeError):
+        if loaded is None:
             return payload
 
         if not isinstance(loaded, dict):
@@ -2038,9 +2080,18 @@ class NotebookTabController(QObject):
             "selected_chapter": self.current_chapter,
             "notes": self._notes_by_chapter,
         }
+        subject_file = self._subject_file_path(self.subject_name)
         try:
-            with self._subject_file_path(self.subject_name).open("w", encoding="utf-8") as handle:
+            subject_file.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = subject_file.with_suffix(f"{subject_file.suffix}.tmp")
+            with temp_path.open("w", encoding="utf-8") as handle:
                 json.dump(payload, handle, indent=2)
+                handle.flush()
+                try:
+                    os.fsync(handle.fileno())
+                except OSError:
+                    pass
+            temp_path.replace(subject_file)
         except OSError:
             pass
 
@@ -2050,16 +2101,6 @@ class NotebookTabController(QObject):
         self._persist_current_editor_state()
         # Save the subject payload to disk
         self._save_subject_payload()
-        # Sync the file to disk using fsync
-        import os
-        try:
-            file_path = self._subject_file_path(self.subject_name) if self.subject_name else None
-            if file_path and file_path.exists():
-                with file_path.open("r", encoding="utf-8") as f:
-                    os.fsync(f.fileno())
-        except (OSError, ValueError, AttributeError):
-            # File might not support fsync, but that's okay
-            pass
 
     def set_subject_structure(self, subject_name: str | None, chapter_titles: list[str]):
         self._persist_current_editor_state()
@@ -2138,8 +2179,8 @@ class NotebookTabController(QObject):
         self.chapter_status_label.setText(f"{len(self.chapter_titles)} chapters")
         self.chapter_title_label.setText("Chapters")
 
+        self.chapter_list.blockSignals(True)
         if self.current_chapter is None:
-            self.chapter_list.blockSignals(True)
             self.chapter_list.clearSelection()
             self.chapter_list.setCurrentItem(None)
             self.chapter_list.blockSignals(False)
@@ -2148,6 +2189,7 @@ class NotebookTabController(QObject):
         item = self._find_chapter_tree_item(self.current_chapter.lower())
         if item is not None:
             self.chapter_list.setCurrentItem(item)
+        self.chapter_list.blockSignals(False)
 
     def _set_editor_html(self, html: str):
         self._loading_editor = True

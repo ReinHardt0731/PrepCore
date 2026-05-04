@@ -165,6 +165,7 @@ class MainWindow(QMainWindow):
         self._wire_actions()
         self._restore_app_state()
         self._refresh_subject_views()
+        QApplication.instance().aboutToQuit.connect(self._flush_persistent_state)
 
     def _ensure_app_state_dir(self):
         self.app_state_dir.mkdir(parents=True, exist_ok=True)
@@ -471,7 +472,9 @@ class MainWindow(QMainWindow):
             QTreeWidget::item {
                 padding: 4px 2px;
             }
-            QTreeWidget::item:selected {
+            QTreeWidget::item:selected,
+            QTreeWidget::item:selected:active,
+            QTreeWidget::item:selected:!active {
                 background-color: #1c3d6b;
                 color: #ffffff;
             }
@@ -604,7 +607,9 @@ class MainWindow(QMainWindow):
                 padding: 6px 8px;
                 border-radius: 8px;
             }
-            QTreeWidget::item:selected {
+            QTreeWidget::item:selected,
+            QTreeWidget::item:selected:active,
+            QTreeWidget::item:selected:!active {
                 background-color: #173158;
                 color: #ffffff;
             }
@@ -2687,7 +2692,8 @@ class MainWindow(QMainWindow):
         )
         self.selected_subject = subject.name
 
-        self._set_current_tree_subject(subject.name)
+        if update_tree:
+            self._set_current_tree_subject(subject.name)
         self._set_current_server_subject(subject.name)
         if subject_changed or force_refresh:
             self._refresh_subject_server_chapters()
@@ -2959,10 +2965,9 @@ class MainWindow(QMainWindow):
         # Remove leading/trailing underscores and dots
         return slug.strip('_.-') or 'subject'
 
-    def closeEvent(self, event):
+    def _flush_persistent_state(self):
         if hasattr(self, "time_organizer_tab"):
             self.time_organizer_tab._flush_gantt_state_save()
-        # Flush all quiz tab data to ensure persistence
         if hasattr(self, "notebook_tab") and hasattr(self.notebook_tab, "_flush_storage_save"):
             self.notebook_tab._flush_storage_save()
         if hasattr(self, "short_quiz_tab") and hasattr(self.short_quiz_tab, "_flush_storage_save"):
@@ -2971,6 +2976,9 @@ class MainWindow(QMainWindow):
             self.long_quiz_tab._flush_storage_save()
         self._save_subjects()
         self._save_app_state()
+
+    def closeEvent(self, event):
+        self._flush_persistent_state()
         super().closeEvent(event)
 
 
