@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "quiz_type": "long_quiz",
+  "subject": "asdawd",
+  "selected_chapter": "asdadw",
+  "chapters": [
+    {
+      "title": "asdadw",
+      "questions": []
+    },
+    {
+      "title": "awdawd",
+      "questions": []
+    }
+  ],
+  "long_quiz_state": {
+    "selected_chapters": [],
+    "requested_question_count": 0,
+    "generated_question_refs": []
+  }
+}
