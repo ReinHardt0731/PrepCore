@@ -5,20 +5,24 @@ import html
 import json
 import mimetypes
 import os
+import re
 import shutil
 import subprocess
+import sys
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from io import BytesIO
 from pathlib import Path
 
 from PySide6.QtCore import (
     QBuffer,
     QByteArray,
+    QEvent,
     QObject,
     QRunnable,
     QRectF,
+    QSignalBlocker,
     QSize,
     QThreadPool,
     QTimer,
@@ -28,6 +32,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import (
     QColor,
     QFont,
+    QFontMetrics,
     QIcon,
     QImage,
     QKeySequence,
@@ -42,16 +47,23 @@ from PySide6.QtGui import (
     QTextCursor,
     QTextDocument,
     QTextListFormat,
+    QTextLength,
     QTransform,
+    QTextTableFormat,
 )
 from PySide6.QtWidgets import (
+    QApplication,
+    QCheckBox,
     QComboBox,
+    QColorDialog,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
+    QFormLayout,
     QFontComboBox,
     QGraphicsEllipseItem,
     QGraphicsItem,
+    QGraphicsObject,
     QGraphicsPixmapItem,
     QGraphicsPolygonItem,
     QGraphicsScene,
@@ -61,6 +73,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMessageBox,
@@ -70,6 +83,7 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QStyle,
     QSizePolicy,
+    QPushButton,
     QSplitter,
     QTextEdit,
     QTextBrowser,
@@ -88,6 +102,7 @@ EQUATION_TEXT_STYLE = (
     "font-family: 'Cambria Math', 'STIX Two Math', 'Times New Roman', serif;"
     f"color: {EQUATION_FOREGROUND_COLOR};"
 )
+NOTEBOOK_AUTOSAVE_DELAY_MS = 450
 LATEX_AUTO_RECHECK_DELAY_SECONDS = 45
 MATH_DELIMITER_PAIRS = (
     ("$$", "$$"),
@@ -198,6 +213,167 @@ class EquationRenderPayload:
     diagnostic: str = ""
 
 
+@dataclass(frozen=True)
+class NotebookCellMetadata:
+    cell_id: str
+    cell_type: str
+    source: str
+    rendered_html: str = ""
+    is_editing: bool = False
+    diagram_settings: "DiagramSettings | None" = None
+
+
+@dataclass(frozen=True)
+class DiagramTextStyle:
+    font_family: str = ""
+    font_size_pt: int = 12
+    bold: bool = False
+    italic: bool = False
+    underline: bool = False
+    color: str = "#edf4ff"
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "font_family": self.font_family,
+            "font_size_pt": self.font_size_pt,
+            "bold": self.bold,
+            "italic": self.italic,
+            "underline": self.underline,
+            "color": self.color,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: object, *, defaults: "DiagramTextStyle") -> "DiagramTextStyle":
+        if not isinstance(payload, dict):
+            return defaults
+        return cls(
+            font_family=str(payload.get("font_family", defaults.font_family)),
+            font_size_pt=max(8, int(payload.get("font_size_pt", defaults.font_size_pt))),
+            bold=bool(payload.get("bold", defaults.bold)),
+            italic=bool(payload.get("italic", defaults.italic)),
+            underline=bool(payload.get("underline", defaults.underline)),
+            color=str(payload.get("color", defaults.color)),
+        )
+
+    def resolved_font(self) -> QFont:
+        font = QApplication.font()
+        if self.font_family.strip():
+            font.setFamily(self.font_family.strip())
+        font.setPointSize(max(8, int(self.font_size_pt)))
+        font.setBold(self.bold)
+        font.setItalic(self.italic)
+        font.setUnderline(self.underline)
+        return font
+
+    def resolved_color(self) -> QColor:
+        color = QColor(self.color)
+        return color if color.isValid() else QColor("#edf4ff")
+
+
+@dataclass(frozen=True)
+class TimelineDiagramStyle:
+    title_style: DiagramTextStyle = field(
+        default_factory=lambda: DiagramTextStyle(
+            font_size_pt=12,
+            bold=True,
+            color="#edf4ff",
+        )
+    )
+    detail_style: DiagramTextStyle = field(
+        default_factory=lambda: DiagramTextStyle(
+            font_size_pt=10,
+            color="#93a8c7",
+        )
+    )
+    row_gap_px: int = 28
+    column_gap_px: int = 28
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "title_style": self.title_style.to_dict(),
+            "detail_style": self.detail_style.to_dict(),
+            "row_gap_px": self.row_gap_px,
+            "column_gap_px": self.column_gap_px,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: object) -> "TimelineDiagramStyle":
+        defaults = cls()
+        if not isinstance(payload, dict):
+            return defaults
+        return cls(
+            title_style=DiagramTextStyle.from_dict(
+                payload.get("title_style"),
+                defaults=defaults.title_style,
+            ),
+            detail_style=DiagramTextStyle.from_dict(
+                payload.get("detail_style"),
+                defaults=defaults.detail_style,
+            ),
+            row_gap_px=max(12, int(payload.get("row_gap_px", defaults.row_gap_px))),
+            column_gap_px=max(12, int(payload.get("column_gap_px", defaults.column_gap_px))),
+        )
+
+
+@dataclass(frozen=True)
+class TreeDiagramLayout:
+    node_positions: dict[str, dict[str, float]] = field(default_factory=dict)
+    auto_layout_direction: str = "vertical"
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "node_positions": self.node_positions,
+            "auto_layout_direction": self.auto_layout_direction,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: object) -> "TreeDiagramLayout":
+        defaults = cls()
+        if not isinstance(payload, dict):
+            return defaults
+        normalized_positions: dict[str, dict[str, float]] = {}
+        raw_positions = payload.get("node_positions", {})
+        if isinstance(raw_positions, dict):
+            for key, value in raw_positions.items():
+                if not isinstance(key, str) or not key.strip() or not isinstance(value, dict):
+                    continue
+                x = value.get("x")
+                y = value.get("y")
+                if isinstance(x, (int, float)) and isinstance(y, (int, float)):
+                    normalized_positions[key] = {"x": float(x), "y": float(y)}
+        direction = str(payload.get("auto_layout_direction", defaults.auto_layout_direction)).strip() or "vertical"
+        return cls(node_positions=normalized_positions, auto_layout_direction=direction)
+
+
+@dataclass(frozen=True)
+class DiagramSettings:
+    display_height_px: int | None = None
+    timeline_style: TimelineDiagramStyle = field(default_factory=TimelineDiagramStyle)
+    tree_layout: TreeDiagramLayout = field(default_factory=TreeDiagramLayout)
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "display_height_px": self.display_height_px,
+            "timeline_style": self.timeline_style.to_dict(),
+            "tree_layout": self.tree_layout.to_dict(),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: object) -> "DiagramSettings":
+        defaults = cls()
+        if not isinstance(payload, dict):
+            return defaults
+        raw_height = payload.get("display_height_px")
+        display_height_px = int(raw_height) if isinstance(raw_height, (int, float)) else None
+        if display_height_px is not None:
+            display_height_px = max(160, display_height_px)
+        return cls(
+            display_height_px=display_height_px,
+            timeline_style=TimelineDiagramStyle.from_dict(payload.get("timeline_style")),
+            tree_layout=TreeDiagramLayout.from_dict(payload.get("tree_layout")),
+        )
+
+
 class EquationRenderTaskSignals(QObject):
     finished = Signal(int, object)
 
@@ -231,6 +407,21 @@ class EquationRenderTask(QRunnable):
 
 
 EQUATION_METADATA_PREFIX = "eqmeta:"
+NOTEBOOK_CELL_METADATA_PREFIX = "nbcell:"
+NOTEBOOK_CELL_ACTION_PREFIX = "nbcellaction:"
+NOTEBOOK_CELL_TYPES = {"code", "markdown", "timeline", "tree"}
+
+
+def _default_diagram_settings() -> DiagramSettings:
+    return DiagramSettings()
+
+
+def _ensure_diagram_settings(metadata_or_settings: NotebookCellMetadata | DiagramSettings | None) -> DiagramSettings:
+    if isinstance(metadata_or_settings, NotebookCellMetadata):
+        settings = metadata_or_settings.diagram_settings
+    else:
+        settings = metadata_or_settings
+    return settings if isinstance(settings, DiagramSettings) else _default_diagram_settings()
 LATEX_BACKEND_UNKNOWN = "unknown"
 LATEX_BACKEND_READY = "ready"
 LATEX_BACKEND_UNAVAILABLE = "unavailable"
@@ -943,6 +1134,588 @@ def render_latex_equation_preview_html(
     )
 
 
+def _encode_notebook_cell_metadata(metadata: NotebookCellMetadata) -> str:
+    diagram_settings = None
+    if metadata.cell_type in {"timeline", "tree"}:
+        diagram_settings = _ensure_diagram_settings(metadata).to_dict()
+    payload = {
+        "version": 2,
+        "cell_id": metadata.cell_id,
+        "cell_type": metadata.cell_type,
+        "source": metadata.source,
+        "rendered_html": metadata.rendered_html,
+        "is_editing": metadata.is_editing,
+        "diagram_settings": diagram_settings,
+    }
+    encoded = base64.urlsafe_b64encode(
+        json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    ).decode("ascii")
+    return f"{NOTEBOOK_CELL_METADATA_PREFIX}{encoded.rstrip('=')}"
+
+
+def _decode_notebook_cell_metadata(href: str | None) -> NotebookCellMetadata | None:
+    if not isinstance(href, str) or not href.startswith(NOTEBOOK_CELL_METADATA_PREFIX):
+        return None
+
+    encoded = href[len(NOTEBOOK_CELL_METADATA_PREFIX) :]
+    if not encoded:
+        return None
+
+    padding = "=" * (-len(encoded) % 4)
+    try:
+        payload = json.loads(base64.urlsafe_b64decode((encoded + padding).encode("ascii")).decode("utf-8"))
+    except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
+        return None
+
+    version = payload.get("version", 1)
+    if not isinstance(version, int) or version < 1 or version > 2:
+        return None
+    cell_id = payload.get("cell_id")
+    cell_type = payload.get("cell_type")
+    source = payload.get("source", "")
+    rendered_html = payload.get("rendered_html", "")
+    is_editing = bool(payload.get("is_editing", False))
+    if not isinstance(cell_id, str) or not cell_id.strip():
+        return None
+    if not isinstance(cell_type, str) or cell_type not in NOTEBOOK_CELL_TYPES:
+        return None
+    if not isinstance(source, str):
+        return None
+    if not isinstance(rendered_html, str):
+        rendered_html = ""
+    diagram_settings = None
+    if cell_type in {"timeline", "tree"}:
+        diagram_settings = DiagramSettings.from_dict(payload.get("diagram_settings"))
+
+    return NotebookCellMetadata(
+        cell_id=cell_id.strip(),
+        cell_type=cell_type,
+        source=source,
+        rendered_html=rendered_html,
+        is_editing=is_editing,
+        diagram_settings=diagram_settings,
+    )
+
+
+def _encode_notebook_cell_action_href(action: str, metadata: NotebookCellMetadata) -> str:
+    if action not in {"run", "edit"}:
+        raise ValueError(f"Unsupported notebook cell action: {action}")
+    payload = _encode_notebook_cell_metadata(metadata)[len(NOTEBOOK_CELL_METADATA_PREFIX) :]
+    return f"{NOTEBOOK_CELL_ACTION_PREFIX}{action}:{payload}"
+
+
+def _decode_notebook_cell_action_href(href: str | None) -> tuple[str, NotebookCellMetadata] | None:
+    if not isinstance(href, str) or not href.startswith(NOTEBOOK_CELL_ACTION_PREFIX):
+        return None
+
+    action_payload = href[len(NOTEBOOK_CELL_ACTION_PREFIX) :]
+    action, separator, payload = action_payload.partition(":")
+    if separator != ":" or not payload:
+        return None
+    metadata = _decode_notebook_cell_metadata(f"{NOTEBOOK_CELL_METADATA_PREFIX}{payload}")
+    if metadata is None or action not in {"run", "edit"}:
+        return None
+    return action, metadata
+
+
+def _decode_notebook_cell_metadata_from_html(document_html: str | None) -> NotebookCellMetadata | None:
+    if not isinstance(document_html, str) or not document_html:
+        return None
+
+    href_matches = re.findall(r'href="([^"]+)"', document_html)
+    for raw_href in href_matches:
+        href = html.unescape(raw_href)
+        metadata = _decode_notebook_cell_metadata(href)
+        if metadata is not None:
+            return metadata
+        decoded_action = _decode_notebook_cell_action_href(href)
+        if decoded_action is not None:
+            _action, metadata = decoded_action
+            return metadata
+    return None
+
+
+def _notebook_cell_label(cell_type: str) -> str:
+    return {
+        "code": "PY",
+        "markdown": "MD",
+        "timeline": "TL",
+        "tree": "TREE",
+    }.get(cell_type, "CELL")
+
+
+def _html_body_fragment(document_html: str) -> str:
+    match = re.search(r"<body[^>]*>(.*)</body>", document_html, re.IGNORECASE | re.DOTALL)
+    if match:
+        return match.group(1)
+    return document_html
+
+
+def _render_markdown_cell_html(source: str) -> str:
+    document = QTextDocument()
+    document.setMarkdown(source)
+    rendered = _html_body_fragment(document.toHtml()).strip()
+    if rendered:
+        return rendered
+    return "<p style=\"color:#93a8c7;\"><i>Empty markdown cell.</i></p>"
+
+
+def _render_code_output_html(source: str) -> str:
+    if not source.strip():
+        return "<p style=\"color:#93a8c7;\"><i>Empty code cell.</i></p>"
+
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", source],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return (
+            "<div style=\"margin-top:8px; color:#ffb4b4;\">"
+            "<b>Timed out:</b> The code cell exceeded the 10 second limit."
+            "</div>"
+        )
+
+    stdout_html = html.escape(result.stdout.rstrip("\n"))
+    stderr_html = html.escape(result.stderr.rstrip("\n"))
+    sections: list[str] = []
+    if stdout_html:
+        sections.append(
+            "<div style=\"margin-top:8px;\">"
+            "<div style=\"color:#7ab0ff; font-weight:700; margin-bottom:4px;\">Output</div>"
+            f"<pre style=\"margin:0; white-space:pre-wrap; color:#edf4ff;\">{stdout_html}</pre>"
+            "</div>"
+        )
+    if stderr_html:
+        sections.append(
+            "<div style=\"margin-top:8px;\">"
+            "<div style=\"color:#ff9b9b; font-weight:700; margin-bottom:4px;\">Errors</div>"
+            f"<pre style=\"margin:0; white-space:pre-wrap; color:#ffcccc;\">{stderr_html}</pre>"
+            "</div>"
+        )
+    if not sections:
+        sections.append(
+            "<div style=\"margin-top:8px; color:#93a8c7;\"><i>Code ran without console output.</i></div>"
+        )
+    return "".join(sections)
+
+
+def _parse_timeline_entries(source: str) -> list[tuple[str, str]]:
+    entries: list[tuple[str, str]] = []
+    for raw_line in source.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if "|" in line:
+            title, detail = line.split("|", 1)
+        else:
+            title, detail = line, ""
+        title = title.strip()
+        detail = detail.strip()
+        if title:
+            entries.append((title, detail))
+    return entries
+
+
+@dataclass
+class _TreeNode:
+    label: str
+    path_id: str
+    children: list["_TreeNode"]
+
+
+def _parse_tree_source(source: str) -> list[_TreeNode]:
+    roots: list[_TreeNode] = []
+    stack: list[tuple[int, _TreeNode]] = []
+    for raw_line in source.splitlines():
+        if not raw_line.strip():
+            continue
+        stripped = raw_line.lstrip(" \t")
+        indent_width = len(raw_line) - len(stripped)
+        depth = max(0, indent_width // 2)
+        while stack and stack[-1][0] >= depth:
+            stack.pop()
+        if stack:
+            parent = stack[-1][1]
+            path_id = f"{parent.path_id}/{len(parent.children)}"
+        else:
+            path_id = str(len(roots))
+        node = _TreeNode(label=stripped.strip(), path_id=path_id, children=[])
+        if stack:
+            stack[-1][1].children.append(node)
+        else:
+            roots.append(node)
+        stack.append((depth, node))
+    return roots
+
+
+def _sanitize_tree_layout_for_source(source: str, settings: DiagramSettings) -> DiagramSettings:
+    roots = _parse_tree_source(source)
+    valid_ids: set[str] = set()
+
+    def collect(node: _TreeNode):
+        valid_ids.add(node.path_id)
+        for child in node.children:
+            collect(child)
+
+    for root in roots:
+        collect(root)
+    cleaned_positions = {
+        path_id: value
+        for path_id, value in settings.tree_layout.node_positions.items()
+        if path_id in valid_ids
+    }
+    if cleaned_positions == settings.tree_layout.node_positions:
+        return settings
+    return replace(
+        settings,
+        tree_layout=replace(settings.tree_layout, node_positions=cleaned_positions),
+    )
+
+
+def _normalized_diagram_settings(diagram_type: str, source: str, settings: DiagramSettings | None) -> DiagramSettings:
+    normalized = _ensure_diagram_settings(settings)
+    if diagram_type == "tree":
+        normalized = _sanitize_tree_layout_for_source(source, normalized)
+    return normalized
+
+
+def _diagram_settings_key(settings: DiagramSettings | None) -> str:
+    normalized = _ensure_diagram_settings(settings)
+    return json.dumps(normalized.to_dict(), sort_keys=True, separators=(",", ":"))
+
+
+def _measure_tree_node_rect(label: str, font: QFont) -> QRectF:
+    metrics = QFontMetrics(font)
+    min_width = 120
+    max_width = 320
+    horizontal_padding = 12
+    vertical_padding = 10
+    inner_width = max_width - (horizontal_padding * 2)
+    natural_width = metrics.horizontalAdvance(label) + (horizontal_padding * 2)
+    width = min(max_width, max(min_width, natural_width))
+    text_rect = metrics.boundingRect(
+        QRectF(0, 0, max(10, width - (horizontal_padding * 2)), 10000).toRect(),
+        int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter | Qt.TextFlag.TextWordWrap),
+        label,
+    )
+    height = max(48, text_rect.height() + (vertical_padding * 2))
+    return QRectF(0, 0, width, height)
+
+
+class TreeNodeGraphicsItem(QGraphicsObject):
+    def __init__(
+        self,
+        *,
+        path_id: str,
+        label: str,
+        font: QFont,
+        fill_color: QColor,
+        border_color: QColor,
+        text_color: QColor,
+        movable: bool,
+        position_changed_callback=None,
+    ):
+        super().__init__()
+        self.path_id = path_id
+        self.label = label
+        self.font = font
+        self.fill_color = fill_color
+        self.border_color = border_color
+        self.text_color = text_color
+        self._position_changed_callback = position_changed_callback
+        self._rect = _measure_tree_node_rect(label, font)
+        self._text_rect = self._rect.adjusted(12, 10, -12, -10)
+        self._callback_enabled = False
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, movable)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, movable)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, movable)
+        self.setCursor(Qt.CursorShape.OpenHandCursor if movable else Qt.CursorShape.ArrowCursor)
+
+    def boundingRect(self) -> QRectF:
+        return self._rect.adjusted(-1, -1, 1, 1)
+
+    def set_position_callback_enabled(self, enabled: bool):
+        self._callback_enabled = enabled
+
+    def paint(self, painter: QPainter, option, widget=None):
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(QPen(self.border_color, 1.6))
+        painter.setBrush(self.fill_color)
+        painter.drawRoundedRect(self._rect, 10, 10)
+        painter.setPen(self.text_color)
+        painter.setFont(self.font)
+        painter.drawText(
+            self._text_rect,
+            int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter | Qt.TextFlag.TextWordWrap),
+            self.label,
+        )
+
+    def itemChange(self, change, value):
+        if (
+            change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged
+            and self._callback_enabled
+            and callable(self._position_changed_callback)
+        ):
+            self._position_changed_callback(self.path_id, value)
+        return super().itemChange(change, value)
+
+    def mousePressEvent(self, event: QGraphicsSceneMouseEvent):
+        self.setCursor(Qt.CursorShape.ClosedHandCursor)
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event: QGraphicsSceneMouseEvent):
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        super().mouseReleaseEvent(event)
+
+
+def _create_text_item(scene: QGraphicsScene, text: str, style: DiagramTextStyle, *, width: float | None = None):
+    item = scene.addText(text)
+    item.setFont(style.resolved_font())
+    item.setDefaultTextColor(style.resolved_color())
+    if width is not None:
+        item.setTextWidth(width)
+    return item
+
+
+def _populate_vertical_timeline_scene(scene: QGraphicsScene, source: str, settings: DiagramSettings):
+    label_brush = QColor("#edf4ff")
+    accent_pen = QPen(QColor("#4f6f99"))
+    accent_pen.setWidthF(2.0)
+    marker_pen = QPen(QColor("#7ab0ff"))
+    marker_pen.setWidthF(1.6)
+
+    entries = _parse_timeline_entries(source)
+    if not entries:
+        scene.addText("Add timeline items using: Title | details").setDefaultTextColor(label_brush)
+        scene.setSceneRect(0, 0, 640, 180)
+        return
+
+    style = settings.timeline_style
+    left_margin = 28.0
+    top_margin = 24.0
+    title_max_width = 260.0
+    detail_max_width = 340.0
+    marker_radius = 8.0
+    column_gap = float(style.column_gap_px)
+    spine_x = left_margin + title_max_width + (column_gap / 2.0)
+    detail_x = spine_x + (column_gap / 2.0) + 18.0
+    row_gap = float(style.row_gap_px)
+    row_layouts: list[tuple[object, object | None, float, float]] = []
+    y = top_margin
+
+    for title, detail in entries:
+        title_item = _create_text_item(scene, title, style.title_style, width=title_max_width)
+        detail_item = _create_text_item(scene, detail, style.detail_style, width=detail_max_width) if detail else None
+        title_rect = title_item.boundingRect()
+        detail_rect = detail_item.boundingRect() if detail_item is not None else QRectF(0, 0, 0, 0)
+        row_height = max(30.0, title_rect.height(), detail_rect.height())
+        row_layouts.append((title_item, detail_item, y, row_height))
+        y += row_height + row_gap
+
+    first_center_y = row_layouts[0][2] + (row_layouts[0][3] / 2.0)
+    last_center_y = row_layouts[-1][2] + (row_layouts[-1][3] / 2.0)
+    scene.addLine(spine_x, first_center_y, spine_x, last_center_y, accent_pen)
+
+    content_bottom = top_margin
+    for title_item, detail_item, row_y, row_height in row_layouts:
+        title_rect = title_item.boundingRect()
+        title_item.setPos(left_margin, row_y + ((row_height - title_rect.height()) / 2.0))
+        marker_center_y = row_y + (row_height / 2.0)
+        scene.addEllipse(
+            spine_x - marker_radius,
+            marker_center_y - marker_radius,
+            marker_radius * 2.0,
+            marker_radius * 2.0,
+            marker_pen,
+            QColor("#19304d"),
+        )
+        if detail_item is not None:
+            detail_rect = detail_item.boundingRect()
+            detail_item.setPos(detail_x, row_y + ((row_height - detail_rect.height()) / 2.0))
+            content_bottom = max(content_bottom, row_y + row_height, detail_item.pos().y() + detail_rect.height())
+        else:
+            content_bottom = max(content_bottom, row_y + row_height)
+
+    scene.setSceneRect(0, 0, detail_x + detail_max_width + 28.0, content_bottom + top_margin)
+
+
+def _auto_layout_tree_positions(
+    roots: list[_TreeNode],
+    node_rects: dict[str, QRectF],
+) -> dict[str, tuple[float, float]]:
+    positions: dict[str, tuple[float, float]] = {}
+    sibling_gap = 40.0
+    level_gap = 84.0
+    top_margin = 24.0
+    left_margin = 24.0
+    max_height = max((rect.height() for rect in node_rects.values()), default=48.0)
+    next_leaf_x = left_margin
+
+    def layout(node: _TreeNode, depth: int) -> float:
+        nonlocal next_leaf_x
+        rect = node_rects[node.path_id]
+        if not node.children:
+            x = next_leaf_x
+            next_leaf_x += rect.width() + sibling_gap
+        else:
+            child_centers = [layout(child, depth + 1) for child in node.children]
+            x = ((child_centers[0] + child_centers[-1]) / 2.0) - (rect.width() / 2.0)
+        y = top_margin + depth * (max_height + level_gap)
+        positions[node.path_id] = (x, y)
+        return x + (rect.width() / 2.0)
+
+    for root in roots:
+        layout(root, 0)
+    return positions
+
+
+def _populate_vertical_tree_scene(
+    scene: QGraphicsScene,
+    source: str,
+    settings: DiagramSettings,
+    *,
+    interactive: bool = False,
+    on_settings_changed=None,
+):
+    label_brush = QColor("#edf4ff")
+    accent_pen = QPen(QColor("#4f6f99"))
+    accent_pen.setWidthF(2.0)
+    node_pen = QColor("#7ab0ff")
+    node_fill = QColor("#19304d")
+
+    roots = _parse_tree_source(source)
+    if not roots:
+        scene.addText("Add a tree using indentation for children").setDefaultTextColor(label_brush)
+        scene.setSceneRect(0, 0, 640, 220)
+        return
+
+    node_font = QApplication.font()
+    node_font.setPointSize(11)
+    node_font.setBold(True)
+
+    node_rects: dict[str, QRectF] = {}
+    node_lookup: dict[str, _TreeNode] = {}
+
+    def collect(node: _TreeNode):
+        node_lookup[node.path_id] = node
+        node_rects[node.path_id] = _measure_tree_node_rect(node.label, node_font)
+        for child in node.children:
+            collect(child)
+
+    for root in roots:
+        collect(root)
+
+    auto_positions = _auto_layout_tree_positions(roots, node_rects)
+    saved_positions = settings.tree_layout.node_positions
+    positions: dict[str, tuple[float, float]] = {}
+    for path_id, auto_pos in auto_positions.items():
+        saved = saved_positions.get(path_id)
+        if isinstance(saved, dict) and isinstance(saved.get("x"), (int, float)) and isinstance(saved.get("y"), (int, float)):
+            positions[path_id] = (float(saved["x"]), float(saved["y"]))
+        else:
+            positions[path_id] = auto_pos
+
+    def handle_item_moved(path_id: str, pos):
+        if not interactive or not callable(on_settings_changed):
+            return
+        updated_positions = dict(settings.tree_layout.node_positions)
+        updated_positions[path_id] = {"x": float(pos.x()), "y": float(pos.y())}
+        on_settings_changed(
+            replace(
+                settings,
+                tree_layout=replace(settings.tree_layout, node_positions=updated_positions),
+            )
+        )
+
+    def draw_connectors(node: _TreeNode):
+        parent_x, parent_y = positions[node.path_id]
+        parent_rect = node_rects[node.path_id]
+        parent_center_x = parent_x + (parent_rect.width() / 2.0)
+        parent_bottom_y = parent_y + parent_rect.height()
+        for child in node.children:
+            child_x, child_y = positions[child.path_id]
+            child_rect = node_rects[child.path_id]
+            child_center_x = child_x + (child_rect.width() / 2.0)
+            scene.addLine(parent_center_x, parent_bottom_y, child_center_x, child_y, accent_pen)
+            draw_connectors(child)
+
+    for root in roots:
+        draw_connectors(root)
+
+    for path_id, node in node_lookup.items():
+        item = TreeNodeGraphicsItem(
+            path_id=path_id,
+            label=node.label,
+            font=node_font,
+            fill_color=node_fill,
+            border_color=node_pen,
+            text_color=label_brush,
+            movable=interactive,
+            position_changed_callback=handle_item_moved,
+        )
+        x, y = positions[path_id]
+        item.setPos(x, y)
+        item.set_position_callback_enabled(interactive)
+        scene.addItem(item)
+
+    bounds = scene.itemsBoundingRect().adjusted(-24, -24, 24, 24)
+    if bounds.isNull():
+        bounds = QRectF(0, 0, 640, 240)
+    scene.setSceneRect(bounds)
+
+
+def _populate_diagram_scene(
+    scene: QGraphicsScene,
+    diagram_type: str,
+    source: str,
+    settings: DiagramSettings | None = None,
+    *,
+    interactive: bool = False,
+    on_settings_changed=None,
+):
+    scene.clear()
+    scene.setBackgroundBrush(QColor("#0f1728"))
+    normalized_settings = _normalized_diagram_settings(diagram_type, source, settings)
+    if diagram_type == "timeline":
+        _populate_vertical_timeline_scene(scene, source, normalized_settings)
+        return
+    _populate_vertical_tree_scene(
+        scene,
+        source,
+        normalized_settings,
+        interactive=interactive,
+        on_settings_changed=on_settings_changed,
+    )
+
+
+def _render_diagram_html(diagram_type: str, source: str, settings: DiagramSettings | None = None) -> str:
+    scene = QGraphicsScene()
+    _populate_diagram_scene(scene, diagram_type, source, settings)
+    rect = scene.sceneRect()
+    image = QImage(int(max(1, rect.width())), int(max(1, rect.height())), QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(QColor("#0f1728"))
+    painter = QPainter(image)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    scene.render(painter)
+    painter.end()
+    byte_array = QByteArray()
+    buffer = QBuffer(byte_array)
+    buffer.open(QBuffer.OpenModeFlag.WriteOnly)
+    image.save(buffer, "PNG")
+    buffer.close()
+    encoded = bytes(byte_array.toBase64()).decode("ascii")
+    return (
+        f'<img src="data:image/png;base64,{encoded}" alt="{html.escape(diagram_type)} diagram" '
+        'style="max-width:100%; border-radius:6px;">'
+    )
+
+
 class EquationInputEdit(QPlainTextEdit):
     def insertFromMimeData(self, source):
         pasted_text = source.text()
@@ -950,6 +1723,77 @@ class EquationInputEdit(QPlainTextEdit):
             self.textCursor().insertText(_normalize_latex_expression(pasted_text))
             return
         super().insertFromMimeData(source)
+
+
+class NotebookRichTextEdit(QTextEdit):
+    anchorActivated = Signal(str)
+
+    def mouseReleaseEvent(self, event: QMouseEvent):
+        anchor = self.anchorAt(event.position().toPoint())
+        super().mouseReleaseEvent(event)
+        if anchor:
+            self.anchorActivated.emit(anchor)
+
+
+class ZoomableGraphicsView(QGraphicsView):
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self._zoom_factor = 1.0
+        self._zoom_step = 1.15
+        self._min_zoom_factor = 0.4
+        self._max_zoom_factor = 6.0
+        self.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
+        self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
+        self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+
+    def fit_to_scene(self):
+        scene = self.scene()
+        if scene is None:
+            return
+        rect = scene.sceneRect()
+        if rect.isNull() or rect.width() <= 0 or rect.height() <= 0:
+            return
+        padded_rect = rect.adjusted(-24, -24, 24, 24)
+        self.resetTransform()
+        self.fitInView(padded_rect, Qt.AspectRatioMode.KeepAspectRatio)
+        self._zoom_factor = 1.0
+
+    def zoom_in(self):
+        self._apply_zoom_factor(self._zoom_step)
+
+    def zoom_out(self):
+        self._apply_zoom_factor(1 / self._zoom_step)
+
+    def wheelEvent(self, event):
+        if event.angleDelta().y() > 0:
+            self.zoom_in()
+            event.accept()
+            return
+        if event.angleDelta().y() < 0:
+            self.zoom_out()
+            event.accept()
+            return
+        super().wheelEvent(event)
+
+    def mousePressEvent(self, event: QMouseEvent):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
+        super().mouseReleaseEvent(event)
+
+    def _apply_zoom_factor(self, factor: float):
+        target_zoom = max(self._min_zoom_factor, min(self._max_zoom_factor, self._zoom_factor * factor))
+        scale_factor = target_zoom / self._zoom_factor
+        if abs(scale_factor - 1.0) < 0.001:
+            return
+        self.scale(scale_factor, scale_factor)
+        self._zoom_factor = target_zoom
 
 
 class ResizablePixmapItem(QGraphicsPixmapItem):
@@ -1580,6 +2424,254 @@ class EquationBuilderDialog(QDialog):
         return _build_equation_insertion_html(self.current_metadata(), payload)
 
 
+class NotebookCellEditDialog(QDialog):
+    def __init__(self, parent: QWidget, *, title: str, initial_source: str, placeholder: str):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.resize(760, 460)
+        layout = QVBoxLayout(self)
+        self.editor = QPlainTextEdit(self)
+        self.editor.setPlainText(initial_source)
+        self.editor.setPlaceholderText(placeholder)
+        layout.addWidget(self.editor, 1)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel, self)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def source_text(self) -> str:
+        return self.editor.toPlainText()
+
+
+class DiagramEditorDialog(QDialog):
+    def __init__(
+        self,
+        parent: QWidget,
+        *,
+        diagram_type: str,
+        initial_source: str = "",
+        initial_settings: DiagramSettings | None = None,
+    ):
+        super().__init__(parent)
+        self.diagram_type = diagram_type
+        self._diagram_settings = _normalized_diagram_settings(diagram_type, initial_source, initial_settings)
+        self._tree_drag_commit_pending = False
+        self.setWindowTitle("Timeline Editor" if diagram_type == "timeline" else "Tree Diagram Editor")
+        self.resize(1040, 640)
+
+        layout = QVBoxLayout(self)
+        splitter = QSplitter(Qt.Orientation.Horizontal, self)
+        layout.addWidget(splitter, 1)
+
+        editor_panel = QWidget(splitter)
+        editor_layout = QVBoxLayout(editor_panel)
+        hint = QLabel(
+            "Timeline: `Title | details` per line." if diagram_type == "timeline"
+            else "Tree: use two spaces for each child level.",
+            editor_panel,
+        )
+        hint.setWordWrap(True)
+        editor_layout.addWidget(hint)
+        self.source_editor = QPlainTextEdit(editor_panel)
+        self.source_editor.setPlainText(initial_source)
+        editor_layout.addWidget(self.source_editor, 1)
+
+        preview_panel = QWidget(splitter)
+        preview_layout = QVBoxLayout(preview_panel)
+
+        self.timeline_style_group: QGroupBox | None = None
+        self.tree_reset_layout_button: QPushButton | None = None
+        self._title_style_controls: dict[str, QWidget] = {}
+        self._detail_style_controls: dict[str, QWidget] = {}
+
+        if self.diagram_type == "timeline":
+            self.timeline_style_group = QGroupBox("Timeline Style", preview_panel)
+            style_layout = QFormLayout(self.timeline_style_group)
+            self._title_style_controls = self._build_text_style_controls(
+                self.timeline_style_group,
+                self._diagram_settings.timeline_style.title_style,
+            )
+            self._detail_style_controls = self._build_text_style_controls(
+                self.timeline_style_group,
+                self._diagram_settings.timeline_style.detail_style,
+            )
+            style_layout.addRow("Title", self._title_style_controls["row"])
+            style_layout.addRow("Details", self._detail_style_controls["row"])
+            self.timeline_row_gap_spinbox = QSpinBox(self.timeline_style_group)
+            self.timeline_row_gap_spinbox.setRange(12, 120)
+            self.timeline_row_gap_spinbox.setValue(self._diagram_settings.timeline_style.row_gap_px)
+            self.timeline_row_gap_spinbox.valueChanged.connect(self._on_timeline_style_changed)
+            style_layout.addRow("Row gap", self.timeline_row_gap_spinbox)
+            preview_layout.addWidget(self.timeline_style_group)
+        else:
+            tree_tools = QWidget(preview_panel)
+            tree_tools_layout = QHBoxLayout(tree_tools)
+            tree_tools_layout.setContentsMargins(0, 0, 0, 0)
+            self.tree_reset_layout_button = QPushButton("Reset Layout", tree_tools)
+            self.tree_reset_layout_button.clicked.connect(self._reset_tree_layout)
+            tree_tools_layout.addWidget(self.tree_reset_layout_button)
+            tree_tools_layout.addStretch(1)
+            preview_layout.addWidget(tree_tools)
+
+        zoom_row = QHBoxLayout()
+        self.zoom_out_button = QPushButton("-", preview_panel)
+        self.zoom_in_button = QPushButton("+", preview_panel)
+        self.zoom_reset_button = QPushButton("Reset", preview_panel)
+        zoom_row.addWidget(self.zoom_out_button)
+        zoom_row.addWidget(self.zoom_in_button)
+        zoom_row.addWidget(self.zoom_reset_button)
+        zoom_row.addStretch(1)
+        preview_layout.addLayout(zoom_row)
+
+        self.scene = QGraphicsScene(preview_panel)
+        self.view = ZoomableGraphicsView(preview_panel)
+        self.view.setScene(self.scene)
+        preview_layout.addWidget(self.view, 1)
+
+        splitter.addWidget(editor_panel)
+        splitter.addWidget(preview_panel)
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 5)
+        splitter.setSizes([360, 680])
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel, self)
+        layout.addWidget(buttons)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+
+        self.zoom_in_button.clicked.connect(self.view.zoom_in)
+        self.zoom_out_button.clicked.connect(self.view.zoom_out)
+        self.zoom_reset_button.clicked.connect(self._reset_zoom)
+        self.source_editor.textChanged.connect(self.refresh_preview)
+        self.refresh_preview()
+
+    def _build_text_style_controls(self, parent: QWidget, style: DiagramTextStyle) -> dict[str, QWidget]:
+        row = QWidget(parent)
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(6)
+
+        font_combo = QFontComboBox(row)
+        if style.font_family.strip():
+            font_combo.setCurrentFont(QFont(style.font_family))
+        size_spinbox = QSpinBox(row)
+        size_spinbox.setRange(8, 48)
+        size_spinbox.setValue(style.font_size_pt)
+        bold_checkbox = QCheckBox("B", row)
+        bold_checkbox.setChecked(style.bold)
+        italic_checkbox = QCheckBox("I", row)
+        italic_checkbox.setChecked(style.italic)
+        underline_checkbox = QCheckBox("U", row)
+        underline_checkbox.setChecked(style.underline)
+        color_button = QPushButton(row)
+        color_button.setFixedWidth(58)
+        self._apply_color_button(color_button, style.color)
+
+        font_combo.currentFontChanged.connect(self._on_timeline_style_changed)
+        size_spinbox.valueChanged.connect(self._on_timeline_style_changed)
+        bold_checkbox.toggled.connect(self._on_timeline_style_changed)
+        italic_checkbox.toggled.connect(self._on_timeline_style_changed)
+        underline_checkbox.toggled.connect(self._on_timeline_style_changed)
+        color_button.clicked.connect(lambda: self._pick_color(color_button))
+
+        row_layout.addWidget(font_combo, 1)
+        row_layout.addWidget(size_spinbox)
+        row_layout.addWidget(bold_checkbox)
+        row_layout.addWidget(italic_checkbox)
+        row_layout.addWidget(underline_checkbox)
+        row_layout.addWidget(color_button)
+
+        return {
+            "row": row,
+            "font_combo": font_combo,
+            "size_spinbox": size_spinbox,
+            "bold_checkbox": bold_checkbox,
+            "italic_checkbox": italic_checkbox,
+            "underline_checkbox": underline_checkbox,
+            "color_button": color_button,
+        }
+
+    def _apply_color_button(self, button: QPushButton, color_value: str):
+        color = QColor(color_value)
+        resolved = color.name() if color.isValid() else "#edf4ff"
+        button.setText(resolved.upper())
+        button.setProperty("diagramColor", resolved)
+        button.setStyleSheet(
+            f"QPushButton {{ background:{resolved}; color:{'#08101d' if color.lightness() > 140 else '#edf4ff'}; }}"
+        )
+
+    def _pick_color(self, button: QPushButton):
+        chosen = QColorDialog.getColor(QColor(str(button.property("diagramColor") or "#edf4ff")), self)
+        if not chosen.isValid():
+            return
+        self._apply_color_button(button, chosen.name())
+        self._on_timeline_style_changed()
+
+    def _text_style_from_controls(self, controls: dict[str, QWidget]) -> DiagramTextStyle:
+        return DiagramTextStyle(
+            font_family=controls["font_combo"].currentFont().family(),
+            font_size_pt=controls["size_spinbox"].value(),
+            bold=controls["bold_checkbox"].isChecked(),
+            italic=controls["italic_checkbox"].isChecked(),
+            underline=controls["underline_checkbox"].isChecked(),
+            color=str(controls["color_button"].property("diagramColor") or "#edf4ff"),
+        )
+
+    def _on_timeline_style_changed(self):
+        if self.diagram_type != "timeline":
+            return
+        self._diagram_settings = replace(
+            self._diagram_settings,
+            timeline_style=replace(
+                self._diagram_settings.timeline_style,
+                title_style=self._text_style_from_controls(self._title_style_controls),
+                detail_style=self._text_style_from_controls(self._detail_style_controls),
+                row_gap_px=self.timeline_row_gap_spinbox.value(),
+            ),
+        )
+        self.refresh_preview(fit=False)
+
+    def _reset_tree_layout(self):
+        if self.diagram_type != "tree":
+            return
+        self._diagram_settings = replace(
+            self._diagram_settings,
+            tree_layout=replace(self._diagram_settings.tree_layout, node_positions={}),
+        )
+        self.refresh_preview()
+
+    def _on_tree_layout_changed(self, settings: DiagramSettings):
+        self._diagram_settings = settings
+        self._tree_drag_commit_pending = True
+
+    def _reset_zoom(self):
+        self.view.fit_to_scene()
+
+    def refresh_preview(self, *, fit: bool = True):
+        self._diagram_settings = _normalized_diagram_settings(
+            self.diagram_type,
+            self.source_editor.toPlainText(),
+            self._diagram_settings,
+        )
+        _populate_diagram_scene(
+            self.scene,
+            self.diagram_type,
+            self.source_editor.toPlainText(),
+            self._diagram_settings,
+            interactive=self.diagram_type == "tree",
+            on_settings_changed=self._on_tree_layout_changed if self.diagram_type == "tree" else None,
+        )
+        if fit or self._tree_drag_commit_pending:
+            self.view.fit_to_scene()
+            self._tree_drag_commit_pending = False
+
+    def source_text(self) -> str:
+        return self.source_editor.toPlainText()
+
+    def diagram_settings(self) -> DiagramSettings:
+        return _normalized_diagram_settings(self.diagram_type, self.source_text(), self._diagram_settings)
+
+
 class NotebookTabController(QObject):
     def __init__(self, page: QWidget):
         super().__init__(page)
@@ -1596,6 +2688,28 @@ class NotebookTabController(QObject):
         self._updating_toolbar = False
         self._toolbar_controls: list[QWidget] = []
         self._shortcuts: list[QShortcut] = []
+        self._context_action_kind: str | None = None
+        self._context_cell_table = None
+        self._context_cell_metadata: NotebookCellMetadata | None = None
+        self._context_equation_info = None
+        self._active_cell_table = None
+        self._active_cell_metadata: NotebookCellMetadata | None = None
+        self._editor_state_dirty = False
+        self._subject_payload_dirty = False
+        self._rendering_notebook_cell = False
+        self._active_diagram_preview_cell_id: str | None = None
+        self._active_diagram_preview_type: str | None = None
+        self._active_diagram_preview_source: str | None = None
+        self._active_diagram_preview_settings_key: str | None = None
+        self._active_diagram_preview_table = None
+        self._diagram_settings_commit_timer = QTimer(self)
+        self._diagram_settings_commit_timer.setSingleShot(True)
+        self._diagram_settings_commit_timer.setInterval(160)
+        self._diagram_settings_commit_timer.timeout.connect(self._commit_pending_diagram_settings)
+        self._autosave_timer = QTimer(self)
+        self._autosave_timer.setSingleShot(True)
+        self._autosave_timer.setInterval(NOTEBOOK_AUTOSAVE_DELAY_MS)
+        self._autosave_timer.timeout.connect(self._flush_pending_subject_save)
 
         self._build_ui()
         self._refresh_chapter_tree()
@@ -1679,6 +2793,9 @@ class NotebookTabController(QObject):
         self.image_button = self._make_action_button("[]", "Insert picture", self._insert_picture)
         self.image_resize_button = self._make_action_button("◈", "Resize image", self._resize_selected_image)
         self.equation_button = self._make_action_button("x²", "Insert equation", self._insert_equation)
+        self.table_button = self._make_action_button("Tbl", "Insert table", self._insert_table)
+        self.markdown_cell_button = self._make_action_button("MD", "Insert markdown cell", self._insert_markdown_cell)
+        self.code_cell_button = self._make_action_button("Py", "Insert code cell", self._insert_code_cell)
 
         for button in (
             self.bold_button,
@@ -1689,6 +2806,9 @@ class NotebookTabController(QObject):
             self.image_button,
             self.image_resize_button,
             self.equation_button,
+            self.table_button,
+            self.markdown_cell_button,
+            self.code_cell_button,
         ):
             primary_toolbar_layout.addWidget(button)
             self._toolbar_controls.append(button)
@@ -1708,6 +2828,9 @@ class NotebookTabController(QObject):
         self.align_justify_button = self._make_format_button("J", "Justify paragraph", self._align_justify)
         self.outdent_button = self._make_action_button("<<", "Decrease indentation", self._outdent_block)
         self.indent_button = self._make_action_button(">>", "Increase indentation", self._indent_block)
+        self.timeline_button = self._make_action_button("TL", "Insert timeline", self._insert_timeline_cell)
+        self.tree_diagram_button = self._make_action_button("Tree", "Insert tree diagram", self._insert_tree_cell)
+        self.export_button = self._make_action_button("Export", "Export notebook", self._export_notebook)
 
         for button in (
             self.bulleted_list_button,
@@ -1718,6 +2841,9 @@ class NotebookTabController(QObject):
             self.align_justify_button,
             self.outdent_button,
             self.indent_button,
+            self.timeline_button,
+            self.tree_diagram_button,
+            self.export_button,
         ):
             secondary_toolbar_layout.addWidget(button)
             self._toolbar_controls.append(button)
@@ -1729,13 +2855,105 @@ class NotebookTabController(QObject):
         self.page_context_label.setContentsMargins(8, 0, 8, 0)
         editor_panel_layout.addWidget(self.page_context_label)
 
-        self.editor = QTextEdit(self.editor_panel)
+        self.editor = NotebookRichTextEdit(self.editor_panel)
         self.editor.setAcceptRichText(True)
         self.editor.setPlaceholderText("Select a chapter on the right to start writing notes.")
         self.editor.textChanged.connect(self._on_editor_changed)
         self.editor.currentCharFormatChanged.connect(self._sync_toolbar_from_format)
         self.editor.cursorPositionChanged.connect(self._sync_toolbar_from_cursor)
+        self.editor.anchorActivated.connect(self._on_editor_anchor_activated)
         editor_panel_layout.addWidget(self.editor, 1)
+
+        self.context_action_bar = QWidget(self.editor.viewport())
+        self.context_action_bar.setStyleSheet(
+            "background:rgba(12, 21, 36, 0.96); border:1px solid #31435f; border-radius:4px;"
+        )
+        context_layout = QVBoxLayout(self.context_action_bar)
+        context_layout.setContentsMargins(3, 3, 3, 3)
+        context_layout.setSpacing(3)
+        self.context_run_button = QToolButton(self.context_action_bar)
+        self.context_edit_button = QToolButton(self.context_action_bar)
+        self.context_run_button.setText("Run")
+        self.context_edit_button.setText("Edit")
+        self.context_run_button.setToolTip("Run")
+        self.context_edit_button.setToolTip("Edit")
+        for button in (self.context_run_button, self.context_edit_button):
+            button.setAutoRaise(False)
+            button.setFixedSize(44, 20)
+            button.setStyleSheet(
+                "QToolButton {"
+                "background:#122338;"
+                "border:1px solid #31435f;"
+                "border-radius:3px;"
+                "color:#dbe7f5;"
+                "font-weight:700;"
+                "padding:0;"
+                "}"
+                "QToolButton:hover {"
+                "background:#1d3a5f;"
+                "border-color:#7ab0ff;"
+                "color:#ffffff;"
+                "}"
+                "QToolButton:pressed {"
+                "background:#0d1a2b;"
+                "border-color:#9ec5ff;"
+                "}"
+            )
+        self.context_run_button.setStyleSheet(
+            self.context_run_button.styleSheet()
+            + "QToolButton { color:#edf4ff; border-color:#7ab0ff; }"
+            + "QToolButton:hover { background:#20456e; border-color:#9ec5ff; }"
+        )
+        self.context_edit_button.setStyleSheet(
+            self.context_edit_button.styleSheet()
+            + "QToolButton:hover { background:#243247; border-color:#93a8c7; }"
+        )
+        self.context_run_button.clicked.connect(self._run_context_action)
+        self.context_edit_button.clicked.connect(self._edit_context_action)
+        context_layout.addWidget(self.context_run_button)
+        context_layout.addWidget(self.context_edit_button)
+        self.context_action_bar.setFixedWidth(50)
+        self.context_action_bar.hide()
+
+        self.diagram_preview_panel = QWidget(self.editor.viewport())
+        self.diagram_preview_panel.setStyleSheet(
+            "background:#101a2b; border:1px solid #617ea3; border-radius:4px;"
+        )
+        diagram_preview_layout = QVBoxLayout(self.diagram_preview_panel)
+        diagram_preview_layout.setContentsMargins(4, 4, 4, 4)
+        diagram_preview_layout.setSpacing(4)
+
+        diagram_preview_header = QWidget(self.diagram_preview_panel)
+        diagram_preview_header_layout = QHBoxLayout(diagram_preview_header)
+        diagram_preview_header_layout.setContentsMargins(0, 0, 0, 0)
+        diagram_preview_header_layout.setSpacing(8)
+        self.diagram_preview_title = QLabel("Diagram Preview", diagram_preview_header)
+        self.diagram_preview_title.setStyleSheet("color:#edf4ff; font-size:10.5pt; font-weight:700;")
+        self.diagram_preview_hint = QLabel("Scroll to zoom. Drag to inspect.", diagram_preview_header)
+        self.diagram_preview_hint.setStyleSheet("color:#93a8c7; font-size:9pt;")
+        self.diagram_preview_fit_button = QToolButton(diagram_preview_header)
+        self.diagram_preview_fit_button.setText("Fit")
+        self.diagram_preview_fit_button.setToolTip("Fit the active diagram to the preview window")
+        self.diagram_preview_fit_button.clicked.connect(lambda: self.diagram_preview_view.fit_to_scene())
+        diagram_preview_header_layout.addWidget(self.diagram_preview_title)
+        diagram_preview_header_layout.addStretch(1)
+        diagram_preview_header_layout.addWidget(self.diagram_preview_hint)
+        diagram_preview_header_layout.addWidget(self.diagram_preview_fit_button)
+        diagram_preview_layout.addWidget(diagram_preview_header)
+        diagram_preview_header.hide()
+
+        self.diagram_preview_view = ZoomableGraphicsView(self.diagram_preview_panel)
+        self.diagram_preview_view.setStyleSheet(
+            "QGraphicsView { background-color:#0f1728; border:1px solid #243652; border-radius:6px; }"
+        )
+        self.diagram_preview_scene = QGraphicsScene(self.diagram_preview_view)
+        self.diagram_preview_view.setScene(self.diagram_preview_scene)
+        diagram_preview_layout.addWidget(self.diagram_preview_view, 1)
+        self.diagram_preview_panel.hide()
+        self.editor.installEventFilter(self)
+        self.editor.viewport().installEventFilter(self)
+        self.editor.verticalScrollBar().valueChanged.connect(self._layout_diagram_preview_panel)
+        self.editor.horizontalScrollBar().valueChanged.connect(self._layout_diagram_preview_panel)
 
         self.chapter_panel = QWidget(self.root_splitter)
         self.chapter_panel.setMinimumWidth(220)
@@ -1787,6 +3005,193 @@ class NotebookTabController(QObject):
         self._install_shortcuts()
         self._set_editor_enabled(False)
         self._sync_toolbar_from_cursor()
+
+    def eventFilter(self, watched, event):
+        if hasattr(self, "editor") and watched is self.editor.viewport() and event.type() == QEvent.Type.Resize:
+            self._layout_diagram_preview_panel()
+        elif hasattr(self, "editor") and watched is self.editor and event.type() == QEvent.Type.KeyPress:
+            if self._handle_active_diagram_keypress(event):
+                return True
+        return super().eventFilter(watched, event)
+
+    def _set_active_cell_metadata(self, metadata: NotebookCellMetadata):
+        self._active_cell_metadata = metadata
+        if self._context_cell_metadata is not None and self._context_cell_metadata.cell_id == metadata.cell_id:
+            self._context_cell_metadata = metadata
+
+    def _apply_active_diagram_settings(
+        self,
+        settings: DiagramSettings,
+        *,
+        commit_immediately: bool,
+        fit_preview: bool = False,
+    ) -> bool:
+        if (
+            self._active_cell_metadata is None
+            or self._active_cell_metadata.cell_type not in {"timeline", "tree"}
+            or not self._table_is_valid(self._active_cell_table)
+        ):
+            return False
+        updated = replace(
+            self._active_cell_metadata,
+            diagram_settings=_normalized_diagram_settings(
+                self._active_cell_metadata.cell_type,
+                self._active_cell_metadata.source,
+                settings,
+            ),
+        )
+        self._set_active_cell_metadata(updated)
+        if commit_immediately:
+            self._commit_pending_diagram_settings(fit_preview=fit_preview)
+        else:
+            self._diagram_settings_commit_timer.start()
+        return True
+
+    def _commit_pending_diagram_settings(self, *, fit_preview: bool = False):
+        if self._diagram_settings_commit_timer.isActive():
+            self._diagram_settings_commit_timer.stop()
+        if (
+            self._active_cell_metadata is None
+            or self._active_cell_metadata.cell_type not in {"timeline", "tree"}
+            or not self._table_is_valid(self._active_cell_table)
+        ):
+            return
+        self._render_notebook_cell_table(self._active_cell_table, self._active_cell_metadata, selected=True)
+        if self._context_action_kind == "cell" and self._context_cell_metadata is not None:
+            self._show_active_diagram_preview(self._active_cell_table, self._active_cell_metadata, fit=fit_preview)
+        self._persist_current_editor_state()
+
+    def _handle_active_diagram_keypress(self, event) -> bool:
+        if event.key() != int(Qt.Key.Key_Space):
+            return False
+        if event.modifiers() & (
+            Qt.KeyboardModifier.ControlModifier
+            | Qt.KeyboardModifier.AltModifier
+            | Qt.KeyboardModifier.MetaModifier
+        ):
+            return False
+        if (
+            self._active_cell_metadata is None
+            or self._active_cell_metadata.cell_type not in {"timeline", "tree"}
+            or self._active_cell_metadata.is_editing
+        ):
+            return False
+        settings = _ensure_diagram_settings(self._active_cell_metadata)
+        geometry = self._diagram_cell_content_geometry(self._active_cell_table, self._active_cell_metadata)
+        auto_height = int(round(geometry.height())) if geometry is not None else 160
+        current_height = max(160, settings.display_height_px or auto_height)
+        delta = -24 if event.modifiers() & Qt.KeyboardModifier.ShiftModifier else 24
+        target_height = max(160, current_height + delta)
+        updated_settings = replace(settings, display_height_px=target_height)
+        return self._apply_active_diagram_settings(updated_settings, commit_immediately=True)
+
+    def _diagram_cell_content_geometry(self, table, metadata: NotebookCellMetadata | None = None) -> QRectF | None:
+        if not self._table_is_valid(table):
+            return None
+
+        try:
+            content_cell = table.cellAt(0, 1)
+            first_cursor = content_cell.firstCursorPosition()
+            last_cursor = content_cell.lastCursorPosition()
+            first_rect = self.editor.cursorRect(first_cursor)
+            last_rect = self.editor.cursorRect(last_cursor)
+            left = max(0, min(first_rect.left(), last_rect.left()) - 6)
+            top = min(first_rect.top(), last_rect.top()) - 6
+            bottom = max(first_rect.bottom(), last_rect.bottom()) + 6
+
+            document_layout = self.editor.document().documentLayout()
+            block = first_cursor.block()
+            last_block = last_cursor.block()
+            while block.isValid():
+                block_cursor = QTextCursor(block)
+                block_rect = self.editor.cursorRect(block_cursor)
+                layout_rect = document_layout.blockBoundingRect(block)
+                top = min(top, block_rect.top() - 6)
+                bottom = max(bottom, block_rect.top() + layout_rect.height() + 6)
+                if block == last_block:
+                    break
+                block = block.next()
+
+            viewport = self.editor.viewport()
+            right = viewport.width() - 8
+            height = bottom - top
+            if right <= left or height <= 0:
+                return None
+            if metadata is not None and metadata.cell_type in {"timeline", "tree"}:
+                settings = _ensure_diagram_settings(metadata)
+                if settings.display_height_px is not None:
+                    height = max(float(settings.display_height_px), float(height))
+            geometry = QRectF(left, top, right - left, height)
+            if geometry.bottom() < 0 or geometry.top() > viewport.height():
+                return None
+            return geometry
+        except (RuntimeError, SystemError):
+            return None
+
+    def _layout_diagram_preview_panel(self):
+        if not hasattr(self, "diagram_preview_panel"):
+            return
+        geometry = self._diagram_cell_content_geometry(self._active_diagram_preview_table, self._active_cell_metadata)
+        if geometry is None:
+            self.diagram_preview_panel.hide()
+            return
+        self.diagram_preview_panel.setGeometry(
+            int(round(geometry.left())),
+            int(round(geometry.top())),
+            int(round(geometry.width())),
+            int(round(geometry.height())),
+        )
+
+    def _show_active_diagram_preview(self, table, metadata: NotebookCellMetadata, *, fit: bool = True):
+        if metadata.cell_type not in {"timeline", "tree"}:
+            self._hide_active_diagram_preview(reset_state=False)
+            return
+
+        settings_key = _diagram_settings_key(metadata.diagram_settings)
+        if (
+            metadata.cell_id != self._active_diagram_preview_cell_id
+            or metadata.cell_type != self._active_diagram_preview_type
+            or metadata.source != self._active_diagram_preview_source
+            or settings_key != self._active_diagram_preview_settings_key
+        ):
+            _populate_diagram_scene(
+                self.diagram_preview_scene,
+                metadata.cell_type,
+                metadata.source,
+                metadata.diagram_settings,
+                interactive=metadata.cell_type == "tree",
+                on_settings_changed=self._on_active_preview_diagram_settings_changed if metadata.cell_type == "tree" else None,
+            )
+            if fit:
+                self.diagram_preview_view.fit_to_scene()
+            self._active_diagram_preview_cell_id = metadata.cell_id
+            self._active_diagram_preview_type = metadata.cell_type
+            self._active_diagram_preview_source = metadata.source
+            self._active_diagram_preview_settings_key = settings_key
+
+        self._active_diagram_preview_table = table
+        self.diagram_preview_title.setText(
+            "Timeline Preview" if metadata.cell_type == "timeline" else "Tree Preview"
+        )
+        self._layout_diagram_preview_panel()
+        if not self.diagram_preview_panel.isHidden():
+            self.diagram_preview_panel.raise_()
+        elif self._diagram_cell_content_geometry(self._active_diagram_preview_table) is not None:
+            self.diagram_preview_panel.show()
+            self.diagram_preview_panel.raise_()
+
+    def _on_active_preview_diagram_settings_changed(self, settings: DiagramSettings):
+        self._apply_active_diagram_settings(settings, commit_immediately=False)
+
+    def _hide_active_diagram_preview(self, *, reset_state: bool = True):
+        if hasattr(self, "diagram_preview_panel"):
+            self.diagram_preview_panel.hide()
+        if reset_state:
+            self._active_diagram_preview_cell_id = None
+            self._active_diagram_preview_type = None
+            self._active_diagram_preview_source = None
+            self._active_diagram_preview_settings_key = None
+            self._active_diagram_preview_table = None
 
     def _make_format_button(self, text: str, tooltip: str, handler):
         button = QToolButton(self.page)
@@ -1951,6 +3356,8 @@ class NotebookTabController(QObject):
         self.editor.setEnabled(enabled)
         for control in self._toolbar_controls:
             control.setEnabled(enabled)
+        if not enabled:
+            self._hide_active_diagram_preview()
 
     def _normalize_chapters(self, chapter_titles: list[str]) -> list[str]:
         normalized_titles: list[str] = []
@@ -2097,13 +3504,11 @@ class NotebookTabController(QObject):
 
     def _flush_storage_save(self):
         """Ensure all notebook data is persisted to disk. Called during app shutdown."""
-        # Persist the current editor state before flushing
-        self._persist_current_editor_state()
-        # Save the subject payload to disk
-        self._save_subject_payload()
+        self._persist_current_editor_state(immediate=True)
+        self._mark_subject_payload_dirty(immediate=True)
 
     def set_subject_structure(self, subject_name: str | None, chapter_titles: list[str]):
-        self._persist_current_editor_state()
+        self._persist_current_editor_state(immediate=True)
 
         self.subject_name = subject_name.strip() if isinstance(subject_name, str) and subject_name.strip() else None
         self.chapter_titles = self._normalize_chapters(chapter_titles)
@@ -2141,39 +3546,31 @@ class NotebookTabController(QObject):
         chapter_title, subchapter_title = normalized.split(" / ", 1)
         return chapter_title.strip(), subchapter_title.strip() or None
 
+    def _split_leaf_parts(self, chapter_path: str) -> list[str]:
+        return [part.strip() for part in chapter_path.strip().split(" / ") if part.strip()]
+
     def _find_chapter_tree_item(self, normalized_path: str) -> QTreeWidgetItem | None:
         for index in range(self.chapter_list.topLevelItemCount()):
-            item = self.chapter_list.topLevelItem(index)
-            stored_path = item.data(0, Qt.ItemDataRole.UserRole)
-            if isinstance(stored_path, str) and stored_path.lower() == normalized_path:
+            item = self._find_tree_item_by_leaf_path(self.chapter_list.topLevelItem(index), normalized_path)
+            if item is not None:
                 return item
-            for child_index in range(item.childCount()):
-                child = item.child(child_index)
-                stored_path = child.data(0, Qt.ItemDataRole.UserRole)
-                if isinstance(stored_path, str) and stored_path.lower() == normalized_path:
-                    return child
+        return None
+
+    def _find_tree_item_by_leaf_path(self, item: QTreeWidgetItem, normalized_path: str) -> QTreeWidgetItem | None:
+        stored_path = item.data(0, Qt.ItemDataRole.UserRole)
+        if isinstance(stored_path, str) and stored_path.lower() == normalized_path:
+            return item
+        for child_index in range(item.childCount()):
+            found = self._find_tree_item_by_leaf_path(item.child(child_index), normalized_path)
+            if found is not None:
+                return found
         return None
 
     def _refresh_chapter_tree(self):
         self.chapter_list.blockSignals(True)
         self.chapter_list.clear()
-        roots: dict[str, QTreeWidgetItem] = {}
         for chapter_path in self.chapter_titles:
-            chapter_title, subchapter_title = self._split_leaf_path(chapter_path)
-            parent_item = roots.get(chapter_title.lower())
-            if parent_item is None:
-                parent_item = QTreeWidgetItem([chapter_title])
-                roots[chapter_title.lower()] = parent_item
-                apply_font_to_item(parent_item, TreeFontConfig.QUIZ_CHAPTER_SIZE)
-                self.chapter_list.addTopLevelItem(parent_item)
-            if subchapter_title is None:
-                parent_item.setData(0, Qt.ItemDataRole.UserRole, chapter_path)
-                continue
-            child_item = QTreeWidgetItem([subchapter_title])
-            child_item.setData(0, Qt.ItemDataRole.UserRole, chapter_path)
-            apply_font_to_item(child_item, TreeFontConfig.QUIZ_SUBCHAPTER_SIZE)
-            parent_item.addChild(child_item)
-            parent_item.setExpanded(True)
+            self._ensure_leaf_path_item(chapter_path)
         self.chapter_list.blockSignals(False)
 
         self.chapter_status_label.setText(f"{len(self.chapter_titles)} chapters")
@@ -2190,6 +3587,37 @@ class NotebookTabController(QObject):
         if item is not None:
             self.chapter_list.setCurrentItem(item)
         self.chapter_list.blockSignals(False)
+
+    def _ensure_leaf_path_item(self, chapter_path: str) -> QTreeWidgetItem | None:
+        parts = self._split_leaf_parts(chapter_path)
+        if not parts:
+            return None
+
+        parent_item: QTreeWidgetItem | None = None
+        for depth, part in enumerate(parts):
+            existing = self._find_child_item(parent_item, part)
+            if existing is None:
+                existing = QTreeWidgetItem([part])
+                if parent_item is None:
+                    self.chapter_list.addTopLevelItem(existing)
+                    apply_font_to_item(existing, TreeFontConfig.QUIZ_CHAPTER_SIZE)
+                else:
+                    parent_item.addChild(existing)
+                    apply_font_to_item(existing, TreeFontConfig.QUIZ_SUBCHAPTER_SIZE)
+                    parent_item.setExpanded(True)
+            parent_item = existing
+
+        if parent_item is not None:
+            parent_item.setData(0, Qt.ItemDataRole.UserRole, chapter_path)
+        return parent_item
+
+    def _find_child_item(self, parent_item: QTreeWidgetItem | None, title: str) -> QTreeWidgetItem | None:
+        count = self.chapter_list.topLevelItemCount() if parent_item is None else parent_item.childCount()
+        for index in range(count):
+            item = self.chapter_list.topLevelItem(index) if parent_item is None else parent_item.child(index)
+            if item.text(0).lower() == title.lower():
+                return item
+        return None
 
     def _set_editor_html(self, html: str):
         self._loading_editor = True
@@ -2215,25 +3643,62 @@ class NotebookTabController(QObject):
         html = self._notes_by_chapter.get(self.current_chapter, "")
         self._set_editor_html(html)
 
-    def _persist_current_editor_state(self):
+    def _mark_subject_payload_dirty(self, *, immediate: bool = False):
+        if not self.subject_name:
+            return
+        self._subject_payload_dirty = True
+        if immediate:
+            self._autosave_timer.stop()
+            self._flush_pending_subject_save()
+        else:
+            self._autosave_timer.start()
+
+    def _sync_current_editor_to_notes(self):
         if self._loading_editor or not self.subject_name or not self.current_chapter:
             return
         self._notes_by_chapter[self.current_chapter] = self.editor.toHtml()
+
+    def _flush_pending_subject_save(self):
+        if self._loading_editor or not self.subject_name:
+            return
+        if self._editor_state_dirty:
+            self._sync_current_editor_to_notes()
+            self._editor_state_dirty = False
+        if not self._subject_payload_dirty:
+            return
         self._save_subject_payload()
+        self._subject_payload_dirty = False
+
+    def _persist_current_editor_state(self, *, immediate: bool = False):
+        if self._loading_editor or not self.subject_name or not self.current_chapter:
+            return
+        self._editor_state_dirty = True
+        self._mark_subject_payload_dirty(immediate=immediate)
 
     def _on_chapter_changed(self):
-        self._persist_current_editor_state()
+        self._persist_current_editor_state(immediate=True)
 
         current_item = self.chapter_list.currentItem()
         chapter_path = current_item.data(0, Qt.ItemDataRole.UserRole) if current_item is not None else None
         self.current_chapter = chapter_path if isinstance(chapter_path, str) else None
 
-        self._save_subject_payload()
+        self._mark_subject_payload_dirty(immediate=True)
         self._load_current_chapter_note()
 
     def _on_editor_changed(self):
-        if self._loading_editor:
+        if self._loading_editor or self._rendering_notebook_cell:
             return
+        if self._active_cell_table is not None and self._active_cell_metadata is not None:
+            updated = self._sync_notebook_cell_metadata_from_table(
+                self._active_cell_table,
+                self._active_cell_metadata,
+            )
+            self._active_cell_metadata = updated
+            if (
+                self._context_cell_metadata is not None
+                and self._context_cell_metadata.cell_id == updated.cell_id
+            ):
+                self._context_cell_metadata = updated
         self._persist_current_editor_state()
 
     def _merge_format_on_selection(self, char_format: QTextCharFormat):
@@ -2310,6 +3775,397 @@ class NotebookTabController(QObject):
         cursor.insertText("``")
         cursor.movePosition(QTextCursor.MoveOperation.Left)
         self.editor.setTextCursor(cursor)
+
+    def _insert_table(self):
+        if not self.editor.isEnabled():
+            return
+
+        rows, accepted = QInputDialog.getInt(self.page, "Insert Table", "Rows:", 2, 1, 20)
+        if not accepted:
+            return
+        columns, accepted = QInputDialog.getInt(self.page, "Insert Table", "Columns:", 2, 1, 10)
+        if not accepted:
+            return
+
+        fmt = QTextTableFormat()
+        fmt.setBorder(1)
+        fmt.setCellPadding(6)
+        fmt.setCellSpacing(0)
+        fmt.setBorderBrush(QColor("#31435f"))
+        self.editor.textCursor().insertTable(rows, columns, fmt)
+
+    def _insert_markdown_cell(self):
+        self._create_notebook_cell("markdown")
+
+    def _insert_code_cell(self):
+        self._create_notebook_cell("code")
+
+    def _insert_timeline_cell(self):
+        self._create_notebook_cell("timeline")
+
+    def _insert_tree_cell(self):
+        self._create_notebook_cell("tree")
+
+    def _create_notebook_cell(self, cell_type: str, *, initial_source: str = ""):
+        if not self.editor.isEnabled():
+            return
+
+        source = initial_source
+        is_editing = cell_type in {"code", "markdown"}
+        diagram_settings = None
+        rendered_html = ""
+        if cell_type not in {"code", "markdown"}:
+            dialog = DiagramEditorDialog(
+                self.page,
+                diagram_type=cell_type,
+                initial_source=initial_source,
+                initial_settings=_default_diagram_settings(),
+            )
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            source = dialog.source_text()
+            diagram_settings = dialog.diagram_settings()
+            rendered_html = _render_diagram_html(cell_type, source, diagram_settings)
+
+        metadata = NotebookCellMetadata(
+            cell_id=f"{cell_type}-{uuid.uuid4().hex}",
+            cell_type=cell_type,
+            source=source,
+            rendered_html=rendered_html,
+            is_editing=is_editing,
+            diagram_settings=diagram_settings,
+        )
+        table = self._insert_notebook_cell_table(metadata)
+        self._active_cell_table = table
+        self._set_active_cell_metadata(metadata)
+        self._persist_current_editor_state()
+
+    def _insert_notebook_cell_table(self, metadata: NotebookCellMetadata):
+        cursor = self.editor.textCursor()
+        table_format = QTextTableFormat()
+        table_format.setBorder(1)
+        table_format.setCellPadding(0)
+        table_format.setCellSpacing(0)
+        table_format.setBorderBrush(QColor("#31435f"))
+        table_format.setWidth(QTextLength(QTextLength.Type.PercentageLength, 100))
+        table_format.setColumnWidthConstraints(
+            [
+                QTextLength(QTextLength.Type.FixedLength, 64),
+                QTextLength(QTextLength.Type.PercentageLength, 100),
+            ]
+        )
+        table = cursor.insertTable(1, 2, table_format)
+        self._render_notebook_cell_table(
+            table,
+            metadata,
+            selected=metadata.cell_type in NOTEBOOK_CELL_TYPES,
+        )
+        self.editor.setTextCursor(self._table_cell_cursor_at_end(table, 0, 1))
+        return table
+
+    def _render_notebook_cell_table(self, table, metadata: NotebookCellMetadata, *, selected: bool = False):
+        if not self._table_is_valid(table):
+            return
+        self._rendering_notebook_cell = True
+        blocker = QSignalBlocker(self.editor)
+        metadata_href = _encode_notebook_cell_metadata(metadata)
+        cell_label = _notebook_cell_label(metadata.cell_type)
+        accent = {
+            "code": "#f4d06f",
+            "markdown": "#7ab0ff",
+            "timeline": "#7ce0c3",
+            "tree": "#b09dff",
+        }.get(metadata.cell_type, "#7ab0ff")
+        is_source_cell = metadata.cell_type in {"code", "markdown"}
+        is_editing = is_source_cell and metadata.is_editing
+        block_background = "#10233a" if is_editing else ("#08101d" if selected else "#101a2b")
+        block_border = accent if is_editing else ("#4b6486" if selected else "#243652")
+        wrapper_border = "#88bfff" if is_editing else ("#617ea3" if selected else "#31435f")
+        gutter_background = "#122338" if is_editing else ("#0c1524" if selected else "#131f31")
+        button_background = "#163254" if selected or is_editing else "#122338"
+        diagram_settings = _ensure_diagram_settings(metadata) if metadata.cell_type in {"timeline", "tree"} else None
+        diagram_min_height = (
+            f" min-height:{int(diagram_settings.display_height_px)}px;"
+            if diagram_settings is not None and diagram_settings.display_height_px is not None
+            else ""
+        )
+
+        source_html = html.escape(metadata.source.strip() or "")
+        if is_editing and metadata.cell_type == "code":
+            preview_html = (
+                f"<div style=\"background:{block_background}; border:1px solid {block_border}; border-radius:0; "
+                "padding:12px;\">"
+                f"<pre style=\"margin:0; white-space:pre-wrap; color:#f9fbff; font-family:'Cascadia Code','Consolas',monospace;\">"
+                f"{source_html or '<br>'}</pre>"
+                "</div>"
+            )
+        elif is_editing and metadata.cell_type == "markdown":
+            preview_html = (
+                f"<div style=\"background:{block_background}; border:1px solid {block_border}; border-radius:0; "
+                "padding:12px;\">"
+                f"<pre style=\"margin:0; white-space:pre-wrap; color:#edf4ff; font-family:'Cascadia Code','Consolas',monospace;\">"
+                f"{source_html or '<br>'}</pre>"
+                "</div>"
+            )
+        elif metadata.cell_type == "code":
+            preview_html = (
+                f"<div style=\"background:{block_background}; border:1px solid {block_border}; border-radius:0; padding:12px;\">"
+                f"<pre style=\"margin:0; white-space:pre-wrap; color:#edf4ff;\">{source_html or '# Write Python here'}</pre>"
+                f"{metadata.rendered_html}"
+                "</div>"
+            )
+        elif metadata.cell_type == "markdown":
+            preview_html = (
+                f"<div style=\"background:{block_background}; border:1px solid {block_border}; border-radius:0; padding:12px;\">"
+                f"{metadata.rendered_html or '<p style=\"color:#93a8c7;\"><i>Run the markdown cell to render it.</i></p>'}"
+                "</div>"
+            )
+        else:
+            preview_html = (
+                f"<div style=\"background:{block_background}; border:1px solid {block_border}; border-radius:0; padding:12px;{diagram_min_height}\">"
+                f"{metadata.rendered_html or '<p style=\"color:#93a8c7;\"><i>Open or run the diagram cell to render it.</i></p>'}"
+                "</div>"
+            )
+
+        self._set_table_cell_html(
+            table,
+            0,
+            0,
+            (
+                f'<div style="background:{gutter_background}; min-height:96px; padding:10px 6px; text-align:center;">'
+                f'<div style="width:48px; min-height:76px; margin:0 auto; border:1px solid {wrapper_border}; '
+                f'background:{button_background}; box-shadow: inset 0 1px 0 {block_border};">'
+                "<p style=\"margin:28px 0 0 0; text-align:center;\">"
+                f'<span style="color:{accent}; font-size:8pt; font-weight:700; letter-spacing:0.08em;">{cell_label}</span>'
+                "</p>"
+                "</div>"
+                f'<a href="{metadata_href}" '
+                f'style="font-size:0; line-height:0; color:{gutter_background}; text-decoration:none;">&#8203;</a>'
+                "</div>"
+            ),
+        )
+        self._set_table_cell_html(
+            table,
+            0,
+            1,
+            (
+                f'<div style="background:{block_background}; border:1px solid {wrapper_border}; padding:4px;">'
+                f"{preview_html}"
+                "</div>"
+            ),
+        )
+        del blocker
+        self._rendering_notebook_cell = False
+
+    def _table_cell_cursor_at_end(self, table, row: int, column: int):
+        if not self._table_is_valid(table):
+            return self.editor.textCursor()
+        return table.cellAt(row, column).lastCursorPosition()
+
+    def _table_is_valid(self, table) -> bool:
+        if table is None:
+            return False
+        try:
+            return table.rows() > 0 and table.columns() > 0
+        except (RuntimeError, SystemError):
+            return False
+
+    def _table_cell_html(self, table, row: int, column: int) -> str:
+        if not self._table_is_valid(table):
+            return ""
+        try:
+            cell = table.cellAt(row, column)
+            cursor = cell.firstCursorPosition()
+            end_position = cell.lastCursorPosition().position()
+            if end_position < cursor.position():
+                return ""
+            cursor.setPosition(end_position, QTextCursor.MoveMode.KeepAnchor)
+            return cursor.selection().toHtml()
+        except (RuntimeError, SystemError):
+            return ""
+
+    def _set_table_cell_html(self, table, row: int, column: int, content_html: str):
+        if not self._table_is_valid(table):
+            return
+        cell = table.cellAt(row, column)
+        cursor = cell.firstCursorPosition()
+        cursor.setPosition(cell.lastCursorPosition().position(), QTextCursor.MoveMode.KeepAnchor)
+        if cursor.hasSelection():
+            cursor.removeSelectedText()
+        cursor.insertHtml(content_html)
+
+    def _extract_notebook_cell_source(self, table) -> str:
+        if not self._table_is_valid(table):
+            return ""
+        source_cell = table.cellAt(0, 1)
+        cursor = source_cell.firstCursorPosition()
+        cursor.setPosition(source_cell.lastCursorPosition().position(), QTextCursor.MoveMode.KeepAnchor)
+        return cursor.selectedText().replace("\u2029", "\n").replace("\u2028", "\n")
+
+    def _sync_notebook_cell_metadata_from_table(self, table, metadata: NotebookCellMetadata) -> NotebookCellMetadata:
+        if not self._table_is_valid(table):
+            return metadata
+        if metadata.cell_type not in {"code", "markdown"} or not metadata.is_editing:
+            return metadata
+        source = self._extract_notebook_cell_source(table)
+        if source == metadata.source:
+            return metadata
+        return NotebookCellMetadata(
+            cell_id=metadata.cell_id,
+            cell_type=metadata.cell_type,
+            source=source,
+            rendered_html=metadata.rendered_html,
+            is_editing=True,
+            diagram_settings=metadata.diagram_settings,
+        )
+
+    def _current_notebook_cell_context(self):
+        table = self.editor.textCursor().currentTable()
+        if not self._table_is_valid(table) or table.rows() < 1 or table.columns() < 2:
+            return None
+
+        metadata = _decode_notebook_cell_metadata_from_html(self._table_cell_html(table, 0, 0))
+        if metadata is None:
+            return None
+        return table, metadata
+
+    def _run_notebook_cell(self, table, metadata: NotebookCellMetadata):
+        metadata = self._sync_notebook_cell_metadata_from_table(table, metadata)
+        diagram_settings = (
+            _normalized_diagram_settings(metadata.cell_type, metadata.source, metadata.diagram_settings)
+            if metadata.cell_type in {"timeline", "tree"}
+            else metadata.diagram_settings
+        )
+        if metadata.cell_type == "code":
+            rendered_html = _render_code_output_html(metadata.source)
+        elif metadata.cell_type == "markdown":
+            rendered_html = _render_markdown_cell_html(metadata.source)
+        else:
+            rendered_html = _render_diagram_html(
+                metadata.cell_type,
+                metadata.source,
+                diagram_settings,
+            )
+
+        updated = NotebookCellMetadata(
+            cell_id=metadata.cell_id,
+            cell_type=metadata.cell_type,
+            source=metadata.source,
+            rendered_html=rendered_html,
+            is_editing=False,
+            diagram_settings=diagram_settings,
+        )
+        self._render_notebook_cell_table(table, updated, selected=False)
+        self._active_cell_table = table
+        self._set_active_cell_metadata(updated)
+        self.editor.setTextCursor(self._table_cell_cursor_at_end(table, 0, 1))
+        self._persist_current_editor_state()
+
+    def _edit_notebook_cell(self, table, metadata: NotebookCellMetadata):
+        metadata = self._sync_notebook_cell_metadata_from_table(table, metadata)
+        if metadata.cell_type in {"code", "markdown"}:
+            updated = NotebookCellMetadata(
+                cell_id=metadata.cell_id,
+                cell_type=metadata.cell_type,
+                source=metadata.source,
+                rendered_html=metadata.rendered_html,
+                is_editing=True,
+                diagram_settings=metadata.diagram_settings,
+            )
+            self._render_notebook_cell_table(table, updated, selected=True)
+            self._active_cell_table = table
+            self._set_active_cell_metadata(updated)
+            self._context_cell_table = table
+            self._context_cell_metadata = updated
+            self.editor.setTextCursor(self._table_cell_cursor_at_end(table, 0, 1))
+            self._persist_current_editor_state()
+            return
+        else:
+            dialog = DiagramEditorDialog(
+                self.page,
+                diagram_type=metadata.cell_type,
+                initial_source=metadata.source,
+                initial_settings=_ensure_diagram_settings(metadata),
+            )
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            source = dialog.source_text()
+            settings = dialog.diagram_settings()
+
+        updated = NotebookCellMetadata(
+            cell_id=metadata.cell_id,
+            cell_type=metadata.cell_type,
+            source=source,
+            rendered_html=metadata.rendered_html,
+            is_editing=metadata.is_editing,
+            diagram_settings=settings if metadata.cell_type in {"timeline", "tree"} else metadata.diagram_settings,
+        )
+        self._run_notebook_cell(table, updated)
+
+    def _on_editor_anchor_activated(self, href: str):
+        decoded = _decode_notebook_cell_action_href(href)
+        if decoded is None:
+            return
+
+        action, metadata = decoded
+        context = self._current_notebook_cell_context()
+        if context is None:
+            table = self._active_cell_table
+            active_metadata = self._active_cell_metadata
+            if table is None or active_metadata is None or active_metadata.cell_id != metadata.cell_id:
+                return
+        else:
+            table, active_metadata = context
+
+        if action == "run":
+            self._run_notebook_cell(table, metadata)
+        elif action == "edit":
+            self._edit_notebook_cell(table, metadata)
+        self._update_context_action_bar()
+
+    def _export_notebook(self):
+        if not self.subject_name:
+            QMessageBox.information(self.page, "Export Notebook", "Select a subject first.")
+            return
+
+        default_name = f"{self._slugify_subject(self.subject_name)}_notebook.html"
+        file_path, _ = QFileDialog.getSaveFileName(
+            self.page,
+            "Export Notebook",
+            str(self.storage_root / default_name),
+            "HTML Files (*.html);;All Files (*)",
+        )
+        if not file_path:
+            return
+
+        self._persist_current_editor_state()
+        sections: list[str] = [
+            "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
+            f"<title>{html.escape(self.subject_name)} Notebook</title>"
+            "<style>body{font-family:'Segoe UI',sans-serif;background:#0f1728;color:#edf4ff;padding:24px;} "
+            "h1,h2{color:#7ab0ff;} section{margin-bottom:32px;} table{border-collapse:collapse;} "
+            "td,th{border:1px solid #31435f;padding:6px;vertical-align:top;} a{color:#7ab0ff;}</style></head><body>"
+        ]
+        sections.append(f"<h1>{html.escape(self.subject_name)} Notebook</h1>")
+        chapter_names = [self.current_chapter] if self.current_chapter else list(self.chapter_titles)
+        seen: set[str] = set()
+        for chapter in chapter_names:
+            if not isinstance(chapter, str) or not chapter.strip():
+                continue
+            key = chapter.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            sections.append(f"<section><h2>{html.escape(chapter)}</h2>")
+            sections.append(self._notes_by_chapter.get(chapter, "<p><i>No notes.</i></p>"))
+            sections.append("</section>")
+        sections.append("</body></html>")
+        try:
+            Path(file_path).write_text("".join(sections), encoding="utf-8")
+        except OSError as exc:
+            QMessageBox.warning(self.page, "Export Failed", str(exc))
+            return
+        QMessageBox.information(self.page, "Export Complete", f"Notebook exported to:\n{file_path}")
 
     def _insert_picture(self):
         if not self.editor.isEnabled():
@@ -2622,6 +4478,25 @@ class NotebookTabController(QObject):
             target_cursor.removeSelectedText()
         target_cursor.insertHtml(equation_html)
         self.editor.setTextCursor(target_cursor)
+        self._persist_current_editor_state()
+
+    def _rerender_current_equation(self):
+        current_equation = self._equation_cursor_info()
+        if current_equation is None:
+            return
+        replacement_cursor, metadata = current_equation
+        try:
+            payload = render_latex_equation_payload(metadata.latex, metadata.to_render_options())
+        except Exception as exc:
+            QMessageBox.warning(self.page, "Equation Render Failed", str(exc))
+            return
+        replacement_cursor.removeSelectedText()
+        replacement_cursor.insertHtml(_build_equation_insertion_html(metadata, payload))
+        self.editor.setTextCursor(replacement_cursor)
+        self._persist_current_editor_state()
+
+    def _edit_current_equation(self):
+        self._insert_equation()
 
     def _apply_bulleted_list(self):
         if not self.editor.isEnabled():
@@ -2705,7 +4580,118 @@ class NotebookTabController(QObject):
         cursor.insertText(selected_text, link_format)
 
     def _sync_toolbar_from_cursor(self):
+        if self._rendering_notebook_cell:
+            return
         self._sync_toolbar_from_format(self.editor.currentCharFormat())
+        self._update_context_action_bar()
+
+    def _update_context_action_bar(self):
+        previous_table = self._active_cell_table
+        previous_metadata = self._active_cell_metadata
+        if self._table_is_valid(previous_table) and previous_metadata is not None:
+            previous_metadata = self._sync_notebook_cell_metadata_from_table(previous_table, previous_metadata)
+        else:
+            previous_table = None
+            previous_metadata = None
+        self._context_action_kind = None
+        self._context_cell_table = None
+        self._context_cell_metadata = None
+        self._context_equation_info = None
+        self._active_cell_table = None
+        self._active_cell_metadata = None
+
+        if not self.editor.isEnabled():
+            if self._table_is_valid(previous_table) and previous_metadata is not None:
+                self._render_notebook_cell_table(previous_table, previous_metadata, selected=False)
+            self._hide_active_diagram_preview()
+            self.context_action_bar.hide()
+            return
+
+        cell_context = self._current_notebook_cell_context()
+        if cell_context is not None:
+            table, metadata = cell_context
+            metadata = self._sync_notebook_cell_metadata_from_table(table, metadata)
+            if (
+                self._table_is_valid(previous_table)
+                and previous_metadata is not None
+                and previous_metadata.cell_id != metadata.cell_id
+            ):
+                self._render_notebook_cell_table(previous_table, previous_metadata, selected=False)
+            should_highlight = metadata.cell_type in NOTEBOOK_CELL_TYPES
+            if should_highlight and (
+                previous_metadata is None
+                or previous_metadata.cell_id != metadata.cell_id
+                or previous_metadata.is_editing != metadata.is_editing
+            ):
+                self._render_notebook_cell_table(table, metadata, selected=True)
+            self._context_action_kind = "cell"
+            self._context_cell_table = table
+            self._context_cell_metadata = metadata
+            self._active_cell_table = table
+            self._active_cell_metadata = metadata
+            if not self._table_is_valid(table):
+                self._hide_active_diagram_preview()
+                self.context_action_bar.hide()
+                return
+            gutter_cursor = table.cellAt(0, 0).firstCursorPosition()
+            gutter_rect = self.editor.cursorRect(gutter_cursor)
+            if metadata.cell_type in {"timeline", "tree"}:
+                self._show_active_diagram_preview(table, metadata)
+                self.context_run_button.setText("Fit")
+                self.context_run_button.setToolTip("Fit the active diagram to the preview window")
+                self.context_edit_button.setToolTip("Edit the active diagram")
+            else:
+                self._hide_active_diagram_preview()
+                self.context_run_button.setText("Run")
+                self.context_run_button.setToolTip("Run")
+                self.context_edit_button.setToolTip("Edit")
+            self.context_edit_button.setText("Edit")
+            self.context_action_bar.adjustSize()
+            self.context_action_bar.move(gutter_rect.left() + 3, max(6, gutter_rect.top() + 8))
+            self.context_action_bar.show()
+            self.context_action_bar.raise_()
+            return
+
+        if self._table_is_valid(previous_table) and previous_metadata is not None:
+            self._render_notebook_cell_table(previous_table, previous_metadata, selected=False)
+        self._hide_active_diagram_preview()
+
+        equation_context = self._equation_cursor_info()
+        if equation_context is not None:
+            self._context_action_kind = "equation"
+            self._context_equation_info = equation_context
+            rect = self.editor.cursorRect()
+            self.context_run_button.setText("Run")
+            self.context_edit_button.setText("Edit")
+            self.context_run_button.setToolTip("Run")
+            self.context_edit_button.setToolTip("Edit")
+            self.context_action_bar.adjustSize()
+            self.context_action_bar.move(4, max(6, rect.top() + 4))
+            self.context_action_bar.show()
+            self.context_action_bar.raise_()
+            return
+
+        self._hide_active_diagram_preview()
+        self.context_action_bar.hide()
+
+    def _run_context_action(self):
+        if self._context_action_kind == "cell" and self._context_cell_table is not None and self._context_cell_metadata is not None:
+            if self._context_cell_metadata.cell_type in {"timeline", "tree"}:
+                self.diagram_preview_view.fit_to_scene()
+            else:
+                self._run_notebook_cell(self._context_cell_table, self._context_cell_metadata)
+            self._update_context_action_bar()
+        elif self._context_action_kind == "equation":
+            self._rerender_current_equation()
+            self._update_context_action_bar()
+
+    def _edit_context_action(self):
+        if self._context_action_kind == "cell" and self._context_cell_table is not None and self._context_cell_metadata is not None:
+            self._edit_notebook_cell(self._context_cell_table, self._context_cell_metadata)
+            self._update_context_action_bar()
+        elif self._context_action_kind == "equation":
+            self._edit_current_equation()
+            self._update_context_action_bar()
 
     def _sync_toolbar_from_format(self, char_format: QTextCharFormat):
         self._updating_toolbar = True
@@ -2722,11 +4708,11 @@ class NotebookTabController(QObject):
         self.italic_button.setChecked(char_format.fontItalic())
         self.underline_button.setChecked(char_format.fontUnderline())
 
-        alignment = self.editor.alignment()
-        self.align_left_button.setChecked(bool(alignment & Qt.AlignmentFlag.AlignLeft))
-        self.align_center_button.setChecked(bool(alignment & Qt.AlignmentFlag.AlignHCenter))
-        self.align_right_button.setChecked(bool(alignment & Qt.AlignmentFlag.AlignRight))
-        self.align_justify_button.setChecked(bool(alignment & Qt.AlignmentFlag.AlignJustify))
+        alignment_value = int(self.editor.alignment())
+        self.align_left_button.setChecked(bool(alignment_value & int(Qt.AlignmentFlag.AlignLeft)))
+        self.align_center_button.setChecked(bool(alignment_value & int(Qt.AlignmentFlag.AlignHCenter)))
+        self.align_right_button.setChecked(bool(alignment_value & int(Qt.AlignmentFlag.AlignRight)))
+        self.align_justify_button.setChecked(bool(alignment_value & int(Qt.AlignmentFlag.AlignJustify)))
         self._updating_toolbar = False
 
 

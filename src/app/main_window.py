@@ -69,12 +69,12 @@ def _runtime_root() -> Path:
 @dataclass
 class ChapterRecord:
     title: str
-    subchapters: list[str] = field(default_factory=list)
+    subchapters: list["ChapterRecord"] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, object]:
         return {
             "title": self.title,
-            "subchapters": self.subchapters,
+            "subchapters": [chapter.to_dict() for chapter in self.subchapters],
         }
 
 
@@ -100,9 +100,17 @@ class MainWindow(QMainWindow):
         self.ui.setupUi(self)
         self.ui.scrollArea.hide()
         self.ui.Subject.setFloating(False)
+        self.ui.Subject.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetMovable
+            | QDockWidget.DockWidgetFeature.DockWidgetFloatable
+            | QDockWidget.DockWidgetFeature.DockWidgetClosable
+        )
         self.ui.Subject.setAllowedAreas(
             Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
         )
+        subject_toggle_action = self.ui.Subject.toggleViewAction()
+        subject_toggle_action.setText("Subject List")
+        self.ui.menuView.addAction(subject_toggle_action)
         self.setDockNestingEnabled(True)
 
         # Application bundle root (where bundled data is stored)
@@ -962,30 +970,26 @@ class MainWindow(QMainWindow):
                 return subject
         return None
 
-    def _chapter_path(self, chapter_title: str, subchapter_title: str | None = None) -> str:
-        chapter = chapter_title.strip()
-        if not subchapter_title:
-            return chapter
-        return f"{chapter} / {subchapter_title.strip()}"
+    def _chapter_path(self, *parts: str) -> str:
+        return " / ".join(part.strip() for part in parts if isinstance(part, str) and part.strip())
+
+    def _split_leaf_parts(self, leaf_path: str) -> list[str]:
+        return [part.strip() for part in leaf_path.strip().split(" / ") if part.strip()]
 
     def _split_leaf_path(self, leaf_path: str) -> tuple[str, str | None]:
-        normalized = leaf_path.strip()
-        if " / " not in normalized:
-            return normalized, None
-        chapter_title, subchapter_title = normalized.split(" / ", 1)
-        return chapter_title.strip(), subchapter_title.strip() or None
+        parts = self._split_leaf_parts(leaf_path)
+        if not parts:
+            return "", None
+        if len(parts) == 1:
+            return parts[0], None
+        return parts[0], self._chapter_path(*parts[1:])
 
     def _subject_leaf_paths(self, subject: SubjectRecord | None) -> list[str]:
         if subject is None:
             return []
         leaf_paths: list[str] = []
         for chapter in subject.chapters:
-            leaf_paths.append(chapter.title)
-            if chapter.subchapters:
-                leaf_paths.extend(
-                    self._chapter_path(chapter.title, subchapter)
-                    for subchapter in chapter.subchapters
-                )
+            leaf_paths.extend(self._leaf_paths_for_node(chapter))
         return leaf_paths
 
     def _selected_subject_chapters(self) -> list[str]:
@@ -999,6 +1003,57 @@ class MainWindow(QMainWindow):
             if chapter.title.lower() == normalized:
                 return chapter
         return None
+
+    def _leaf_paths_for_node(self, chapter: ChapterRecord, parent_parts: list[str] | None = None) -> list[str]:
+        current_parts = [*(parent_parts or []), chapter.title]
+        leaf_paths = [self._chapter_path(*current_parts)]
+        for child in chapter.subchapters:
+            leaf_paths.extend(self._leaf_paths_for_node(child, current_parts))
+        return leaf_paths
+
+    def _find_chapter_record_by_path(
+        self,
+        subject: SubjectRecord | None,
+        leaf_path: str,
+    ) -> tuple[ChapterRecord | None, ChapterRecord | None, list[ChapterRecord] | None]:
+        if subject is None:
+            return None, None, None
+
+        parts = self._split_leaf_parts(leaf_path)
+        if not parts:
+            return None, None, None
+
+        siblings = subject.chapters
+        parent: ChapterRecord | None = None
+        current: ChapterRecord | None = None
+        for part in parts:
+            current = next((item for item in siblings if item.title.lower() == part.lower()), None)
+            if current is None:
+                return None, None, None
+            parent = current if current is not None else parent
+            siblings = current.subchapters
+
+        return current, self._parent_for_path(subject, parts), self._siblings_for_path(subject, parts)
+
+    def _parent_for_path(self, subject: SubjectRecord, parts: list[str]) -> ChapterRecord | None:
+        if len(parts) <= 1:
+            return None
+        siblings = subject.chapters
+        parent: ChapterRecord | None = None
+        for part in parts[:-1]:
+            parent = next((item for item in siblings if item.title.lower() == part.lower()), None)
+            if parent is None:
+                return None
+            siblings = parent.subchapters
+        return parent
+
+    def _siblings_for_path(self, subject: SubjectRecord, parts: list[str]) -> list[ChapterRecord] | None:
+        if not parts:
+            return None
+        parent = self._parent_for_path(subject, parts)
+        if parent is None:
+            return subject.chapters
+        return parent.subchapters
 
     def _leaf_path_exists(self, subject: SubjectRecord | None, leaf_path: str, *, excluding_path: str | None = None) -> bool:
         normalized = leaf_path.strip().lower()
@@ -1034,20 +1089,16 @@ class MainWindow(QMainWindow):
     def _subject_from_leaf_paths(self, name: str, leaf_paths: list[str]) -> SubjectRecord:
         chapters: list[ChapterRecord] = []
         for leaf_path in leaf_paths:
-            chapter_title, subchapter_title = self._split_leaf_path(leaf_path)
-            if not chapter_title:
+            parts = self._split_leaf_parts(leaf_path)
+            if not parts:
                 continue
-            chapter = next(
-                (item for item in chapters if item.title.lower() == chapter_title.lower()),
-                None,
-            )
-            if chapter is None:
-                chapter = ChapterRecord(title=chapter_title)
-                chapters.append(chapter)
-            if subchapter_title:
-                if any(saved.lower() == subchapter_title.lower() for saved in chapter.subchapters):
-                    continue
-                chapter.subchapters.append(subchapter_title)
+            siblings = chapters
+            for part in parts:
+                chapter = next((item for item in siblings if item.title.lower() == part.lower()), None)
+                if chapter is None:
+                    chapter = ChapterRecord(title=part)
+                    siblings.append(chapter)
+                siblings = chapter.subchapters
         return SubjectRecord(name=name, chapters=chapters)
 
     def _collect_chapters_from_bank_payload(self, bank_payload) -> list[str]:
@@ -1073,6 +1124,39 @@ class MainWindow(QMainWindow):
             chapters.append(normalized)
 
         return chapters
+
+    def _collect_nested_leaf_paths(self, raw_subchapters, parent_parts: list[str]) -> list[str]:
+        leaf_paths: list[str] = []
+        if not isinstance(raw_subchapters, list):
+            return leaf_paths
+
+        for entry in raw_subchapters:
+            if isinstance(entry, str):
+                normalized = entry.strip()
+                if not normalized:
+                    continue
+                leaf_paths = self._merge_leaf_paths(
+                    leaf_paths,
+                    [self._chapter_path(*parent_parts, normalized)],
+                )
+                continue
+
+            if not isinstance(entry, dict):
+                continue
+
+            title = entry.get("title") or entry.get("chapter")
+            if not isinstance(title, str) or not title.strip():
+                continue
+
+            normalized = title.strip()
+            current_parts = [*parent_parts, normalized]
+            leaf_paths = self._merge_leaf_paths(leaf_paths, [self._chapter_path(*current_parts)])
+            leaf_paths = self._merge_leaf_paths(
+                leaf_paths,
+                self._collect_nested_leaf_paths(entry.get("subchapters", []), current_parts),
+            )
+
+        return leaf_paths
 
     def _collect_chapters_from_storage(self, subject_name: str) -> list[str]:
         subject_dir = self._quiz_bank_dir(subject_name)
@@ -1123,23 +1207,12 @@ class MainWindow(QMainWindow):
                         if not isinstance(chapter_title, str) or not chapter_title.strip():
                             continue
                         normalized_title = chapter_title.strip()
-                        raw_subchapters = chapter.get("subchapters", [])
-                        if isinstance(raw_subchapters, list) and raw_subchapters:
-                            normalized_subchapters: list[str] = []
-                            for subchapter in raw_subchapters:
-                                if not isinstance(subchapter, str) or not subchapter.strip():
-                                    continue
-                                normalized_subchapter = subchapter.strip()
-                                if any(saved.lower() == normalized_subchapter.lower() for saved in normalized_subchapters):
-                                    continue
-                                normalized_subchapters.append(normalized_subchapter)
-                            if normalized_subchapters:
-                                leaf_paths = self._merge_leaf_paths(
-                                    leaf_paths,
-                                    [self._chapter_path(normalized_title, subchapter) for subchapter in normalized_subchapters],
-                                )
-                                continue
                         leaf_paths = self._merge_leaf_paths(leaf_paths, [normalized_title])
+                        raw_subchapters = chapter.get("subchapters", [])
+                        leaf_paths = self._merge_leaf_paths(
+                            leaf_paths,
+                            self._collect_nested_leaf_paths(raw_subchapters, [normalized_title]),
+                        )
 
             if not name:
                 continue
@@ -1195,24 +1268,35 @@ class MainWindow(QMainWindow):
         return item
 
     def _make_chapter_item(self, subject_name: str, chapter: ChapterRecord) -> QTreeWidgetItem:
+        return self._make_chapter_item_recursive(subject_name, chapter, parent_parts=[], level=1)
+
+    def _make_chapter_item_recursive(
+        self,
+        subject_name: str,
+        chapter: ChapterRecord,
+        *,
+        parent_parts: list[str],
+        level: int,
+    ) -> QTreeWidgetItem:
+        leaf_path = self._chapter_path(*parent_parts, chapter.title)
         child = QTreeWidgetItem([chapter.title])
-        child.setData(0, ITEM_KIND_ROLE, "chapter")
+        child.setData(0, ITEM_KIND_ROLE, "chapter" if level == 1 else "subchapter")
         child.setData(0, SUBJECT_NAME_ROLE, subject_name)
         child.setData(0, CHAPTER_NAME_ROLE, chapter.title)
-        child.setData(0, LEAF_PATH_ROLE, chapter.title)
-        apply_hierarchical_font_to_item(child, level=1)
+        child.setData(0, PARENT_CHAPTER_ROLE, self._chapter_path(*parent_parts) if parent_parts else None)
+        child.setData(0, LEAF_PATH_ROLE, leaf_path)
+        apply_hierarchical_font_to_item(child, level=min(level, 2))
 
+        for subchapter in chapter.subchapters:
+            child.addChild(
+                self._make_chapter_item_recursive(
+                    subject_name,
+                    subchapter,
+                    parent_parts=[*parent_parts, chapter.title],
+                    level=level + 1,
+                )
+            )
         if chapter.subchapters:
-            for subchapter_name in chapter.subchapters:
-                leaf_path = self._chapter_path(chapter.title, subchapter_name)
-                grandchild = QTreeWidgetItem([subchapter_name])
-                grandchild.setData(0, ITEM_KIND_ROLE, "subchapter")
-                grandchild.setData(0, SUBJECT_NAME_ROLE, subject_name)
-                grandchild.setData(0, CHAPTER_NAME_ROLE, subchapter_name)
-                grandchild.setData(0, PARENT_CHAPTER_ROLE, chapter.title)
-                grandchild.setData(0, LEAF_PATH_ROLE, leaf_path)
-                apply_hierarchical_font_to_item(grandchild, level=2)
-                child.addChild(grandchild)
             child.setExpanded(True)
         return child
 
@@ -1293,15 +1377,12 @@ class MainWindow(QMainWindow):
 
     def _find_subject_server_chapter_item(self, normalized_path: str) -> QTreeWidgetItem | None:
         for index in range(self.subject_server_chapter_tree.topLevelItemCount()):
-            item = self.subject_server_chapter_tree.topLevelItem(index)
-            stored_path = item.data(0, LEAF_PATH_ROLE)
-            if isinstance(stored_path, str) and stored_path.lower() == normalized_path:
-                return item
-            for child_index in range(item.childCount()):
-                child = item.child(child_index)
-                stored_path = child.data(0, LEAF_PATH_ROLE)
-                if isinstance(stored_path, str) and stored_path.lower() == normalized_path:
-                    return child
+            found = self._find_tree_item_by_leaf_path(
+                self.subject_server_chapter_tree.topLevelItem(index),
+                normalized_path,
+            )
+            if found is not None:
+                return found
         return None
 
     def _set_current_server_chapter(self, subject_name: str, chapter_name: str):
@@ -1339,24 +1420,25 @@ class MainWindow(QMainWindow):
 
         normalized = chapter_name.strip().lower()
         for index in range(subject_item.childCount()):
-            child = subject_item.child(index)
-            stored_leaf = child.data(0, LEAF_PATH_ROLE)
-            if isinstance(stored_leaf, str) and stored_leaf.lower() == normalized:
-                self.subject_tree.blockSignals(True)
-                self.subject_tree.setCurrentItem(child)
-                self.subject_tree.blockSignals(False)
-                self._set_current_server_chapter(subject_name, chapter_name)
-                return
-            for sub_index in range(child.childCount()):
-                grandchild = child.child(sub_index)
-                stored_leaf = grandchild.data(0, LEAF_PATH_ROLE)
-                if isinstance(stored_leaf, str) and stored_leaf.lower() == normalized:
-                    self.subject_tree.blockSignals(True)
-                    self.subject_tree.setCurrentItem(grandchild)
-                    self.subject_tree.blockSignals(False)
-                    self._set_current_server_chapter(subject_name, chapter_name)
-                    return
+            found = self._find_tree_item_by_leaf_path(subject_item.child(index), normalized)
+            if found is None:
+                continue
+            self.subject_tree.blockSignals(True)
+            self.subject_tree.setCurrentItem(found)
+            self.subject_tree.blockSignals(False)
+            self._set_current_server_chapter(subject_name, chapter_name)
+            return
         self._set_current_server_chapter(subject_name, chapter_name)
+
+    def _find_tree_item_by_leaf_path(self, item: QTreeWidgetItem, normalized_path: str) -> QTreeWidgetItem | None:
+        stored_leaf = item.data(0, LEAF_PATH_ROLE)
+        if isinstance(stored_leaf, str) and stored_leaf.lower() == normalized_path:
+            return item
+        for child_index in range(item.childCount()):
+            found = self._find_tree_item_by_leaf_path(item.child(child_index), normalized_path)
+            if found is not None:
+                return found
+        return None
 
     def _show_first_time_setup(self):
         """Show first-time setup wizard to configure data path."""
@@ -1540,15 +1622,15 @@ class MainWindow(QMainWindow):
         if accepted:
             self._add_chapter(subject_name, text)
 
-    def prompt_add_subchapter(self, subject_name: str, chapter_name: str):
+    def prompt_add_subchapter(self, subject_name: str, parent_leaf_path: str):
         text, accepted = QInputDialog.getText(
             self,
             "Add Subchapter",
-            f"Enter a subchapter name for {chapter_name}:",
+            f"Enter a subchapter name for {parent_leaf_path}:",
             QLineEdit.EchoMode.Normal,
         )
         if accepted:
-            self._add_subchapter(subject_name, chapter_name, text)
+            self._add_subchapter(subject_name, parent_leaf_path, text)
 
     def prompt_rename_subject(self, subject_name: str):
         subject = self._find_subject(subject_name)
@@ -1568,29 +1650,20 @@ class MainWindow(QMainWindow):
     def prompt_rename_chapter(
         self,
         subject_name: str,
-        chapter_name: str,
-        *,
-        parent_chapter_name: str | None = None,
+        chapter_path: str,
     ):
         subject = self._find_subject(subject_name)
         if subject is None:
             return
 
-        if parent_chapter_name is None:
-            chapter = self._find_chapter_record(subject, chapter_name)
-            current_title = chapter.title if chapter is not None else None
+        chapter, parent, _siblings = self._find_chapter_record_by_path(subject, chapter_path)
+        current_title = chapter.title if chapter is not None else None
+        if parent is None:
             dialog_title = "Rename Chapter"
             prompt_text = f"Enter a new chapter name for {subject.name}:"
         else:
-            chapter = self._find_chapter_record(subject, parent_chapter_name)
-            if chapter is None:
-                return
-            current_title = next(
-                (item for item in chapter.subchapters if item.lower() == chapter_name.strip().lower()),
-                None,
-            )
             dialog_title = "Rename Subchapter"
-            prompt_text = f"Enter a new subchapter name for {parent_chapter_name}:"
+            prompt_text = f"Enter a new subchapter name for {chapter_path}:"
 
         if current_title is None:
             return
@@ -1603,10 +1676,7 @@ class MainWindow(QMainWindow):
             current_title,
         )
         if accepted:
-            if parent_chapter_name is None:
-                self._rename_chapter(subject.name, current_title, text)
-            else:
-                self._rename_subchapter(subject.name, parent_chapter_name, current_title, text)
+            self._rename_chapter(subject.name, chapter_path, text)
 
     def resolve_subject_for_quiz_import(self):
         if self.selected_subject:
@@ -1742,14 +1812,14 @@ class MainWindow(QMainWindow):
     def _add_subchapter(
         self,
         subject_name: str,
-        chapter_name: str,
+        parent_leaf_path: str,
         subchapter_name: str,
         *,
         save=True,
         show_errors=True,
     ):
         subject = self._find_subject(subject_name)
-        chapter = self._find_chapter_record(subject, chapter_name)
+        chapter, _parent, _siblings = self._find_chapter_record_by_path(subject, parent_leaf_path)
         if subject is None or chapter is None:
             return False
 
@@ -1759,13 +1829,13 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Invalid Subchapter", "Please enter a subchapter name.")
             return False
 
-        new_leaf_path = self._chapter_path(chapter.title, normalized)
+        new_leaf_path = self._chapter_path(parent_leaf_path, normalized)
         if self._leaf_path_exists(subject, new_leaf_path):
             if show_errors:
                 QMessageBox.information(self, "Duplicate Subchapter", "That subchapter already exists.")
             return False
 
-        chapter.subchapters.append(normalized)
+        chapter.subchapters.append(ChapterRecord(title=normalized))
         self._rebuild_subject_tree()
 
         if save:
@@ -2086,15 +2156,15 @@ class MainWindow(QMainWindow):
     def _rename_chapter(
         self,
         subject_name: str,
-        chapter_name: str,
+        chapter_path: str,
         new_chapter_name: str,
         *,
         save=True,
         show_errors=True,
     ):
         subject = self._find_subject(subject_name)
-        chapter = self._find_chapter_record(subject, chapter_name)
-        if subject is None or chapter is None:
+        chapter, parent, siblings = self._find_chapter_record_by_path(subject, chapter_path)
+        if subject is None or chapter is None or siblings is None:
             if show_errors:
                 QMessageBox.information(self, "Missing Chapter", "That chapter no longer exists.")
             return False
@@ -2105,18 +2175,17 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Invalid Chapter", "Please enter a chapter name.")
             return False
 
-        if any(item.title.lower() == normalized.lower() and item.title.lower() != chapter.title.lower() for item in subject.chapters):
+        if any(item.title.lower() == normalized.lower() and item.title.lower() != chapter.title.lower() for item in siblings):
             if show_errors:
                 QMessageBox.information(self, "Duplicate Chapter", "That chapter already exists.")
             return False
 
         rename_map = {}
+        old_parts = self._split_leaf_parts(chapter_path)
+        new_prefix = self._chapter_path(*old_parts[:-1], normalized)
         for leaf_path in self._leaf_paths_for_chapter(chapter):
-            _old_parent, subchapter_title = self._split_leaf_path(leaf_path)
-            if subchapter_title is None:
-                rename_map[leaf_path] = normalized
-            else:
-                rename_map[leaf_path] = self._chapter_path(normalized, subchapter_title)
+            suffix_parts = self._split_leaf_parts(leaf_path)[1:]
+            rename_map[self._chapter_path(*old_parts[:-1], leaf_path)] = self._chapter_path(new_prefix, *suffix_parts)
 
         success, error_message = self._rename_chapter_storage(subject.name, rename_map)
         if not success:
@@ -2132,80 +2201,35 @@ class MainWindow(QMainWindow):
 
         if self.selected_subject and self.selected_subject.lower() == subject.name.lower():
             self.select_subject(subject.name, update_tree=False, force_refresh=True)
-            if chapter.subchapters:
-                self._set_current_tree_subject(subject.name)
-            else:
-                self._set_current_tree_chapter(subject.name, normalized)
-                active_chapter_tab = self._active_chapter_tab()
-                if active_chapter_tab is not None:
-                    active_chapter_tab.focus_chapter(normalized)
+            self._set_current_tree_chapter(subject.name, new_prefix)
+            active_chapter_tab = self._active_chapter_tab()
+            if active_chapter_tab is not None:
+                active_chapter_tab.focus_chapter(new_prefix)
         elif self.selected_subject:
             self._set_current_tree_subject(self.selected_subject)
 
         return True
 
     def _leaf_paths_for_chapter(self, chapter: ChapterRecord) -> list[str]:
-        return self._subject_leaf_paths(SubjectRecord(name="", chapters=[chapter]))
+        return self._leaf_paths_for_node(chapter)
 
     def _rename_subchapter(
         self,
         subject_name: str,
-        chapter_name: str,
+        parent_path: str,
         subchapter_name: str,
         new_subchapter_name: str,
         *,
         save=True,
         show_errors=True,
     ):
-        subject = self._find_subject(subject_name)
-        chapter = self._find_chapter_record(subject, chapter_name)
-        if subject is None or chapter is None:
-            return False
-
-        subchapter_index = next(
-            (index for index, item in enumerate(chapter.subchapters) if item.lower() == subchapter_name.strip().lower()),
-            -1,
+        return self._rename_chapter(
+            subject_name,
+            self._chapter_path(parent_path, subchapter_name),
+            new_subchapter_name,
+            save=save,
+            show_errors=show_errors,
         )
-        if subchapter_index < 0:
-            if show_errors:
-                QMessageBox.information(self, "Missing Subchapter", "That subchapter no longer exists.")
-            return False
-
-        normalized = new_subchapter_name.strip()
-        if not normalized:
-            if show_errors:
-                QMessageBox.warning(self, "Invalid Subchapter", "Please enter a subchapter name.")
-            return False
-
-        old_leaf_path = self._chapter_path(chapter.title, chapter.subchapters[subchapter_index])
-        new_leaf_path = self._chapter_path(chapter.title, normalized)
-        if self._leaf_path_exists(subject, new_leaf_path, excluding_path=old_leaf_path):
-            if show_errors:
-                QMessageBox.information(self, "Duplicate Subchapter", "That subchapter already exists.")
-            return False
-
-        success, error_message = self._rename_chapter_storage(subject.name, {old_leaf_path: new_leaf_path})
-        if not success:
-            if show_errors:
-                QMessageBox.warning(self, "Rename Subchapter Failed", error_message or "Unable to rename subchapter.")
-            return False
-
-        chapter.subchapters[subchapter_index] = normalized
-        self._rebuild_subject_tree()
-
-        if save:
-            self._save_subjects()
-
-        if self.selected_subject and self.selected_subject.lower() == subject.name.lower():
-            self.select_subject(subject.name, update_tree=False, force_refresh=True)
-            self._set_current_tree_chapter(subject.name, new_leaf_path)
-            active_chapter_tab = self._active_chapter_tab()
-            if active_chapter_tab is not None:
-                active_chapter_tab.focus_chapter(new_leaf_path)
-        elif self.selected_subject:
-            self._set_current_tree_subject(self.selected_subject)
-
-        return True
 
     def _delete_subject(self, subject_name: str, *, save=True, show_errors=True):
         subject = self._find_subject(subject_name)
@@ -2258,18 +2282,15 @@ class MainWindow(QMainWindow):
 
         return True
 
-    def _delete_chapter(self, subject_name: str, chapter_name: str, *, save=True, show_errors=True):
+    def _delete_chapter(self, subject_name: str, chapter_path: str, *, save=True, show_errors=True):
         subject = self._find_subject(subject_name)
-        chapter = self._find_chapter_record(subject, chapter_name)
-        if subject is None or chapter is None:
+        chapter, _parent, siblings = self._find_chapter_record_by_path(subject, chapter_path)
+        if subject is None or chapter is None or siblings is None:
             if show_errors:
                 QMessageBox.information(self, "Missing Chapter", "That chapter no longer exists.")
             return False
 
-        chapter_index = next(
-            (index for index, item in enumerate(subject.chapters) if item.title.lower() == chapter.title.lower()),
-            -1,
-        )
+        chapter_index = next((index for index, item in enumerate(siblings) if item.title.lower() == chapter.title.lower()), -1)
         actual_title = chapter.title
         confirm = QMessageBox.question(
             self,
@@ -2279,8 +2300,9 @@ class MainWindow(QMainWindow):
         if confirm != QMessageBox.StandardButton.Yes:
             return False
 
-        del subject.chapters[chapter_index]
-        self._delete_chapter_storage(subject.name, self._leaf_paths_for_chapter(chapter))
+        delete_leaf_paths = [self._chapter_path(*self._split_leaf_parts(chapter_path)[:-1], leaf) for leaf in self._leaf_paths_for_chapter(chapter)]
+        del siblings[chapter_index]
+        self._delete_chapter_storage(subject.name, delete_leaf_paths)
         self._rebuild_subject_tree()
 
         if save:
@@ -2288,10 +2310,10 @@ class MainWindow(QMainWindow):
 
         if self.selected_subject and self.selected_subject.lower() == subject.name.lower():
             self.select_subject(subject.name, update_tree=False, force_refresh=True)
-            if subject.chapters:
-                next_index = min(chapter_index, len(subject.chapters) - 1)
-                next_chapter = subject.chapters[next_index]
-                next_leaf = self._leaf_paths_for_chapter(next_chapter)[0]
+            if siblings:
+                next_index = min(chapter_index, len(siblings) - 1)
+                next_chapter = siblings[next_index]
+                next_leaf = self._chapter_path(*self._split_leaf_parts(chapter_path)[:-1], next_chapter.title)
                 self._set_current_tree_chapter(subject.name, next_leaf)
                 active_chapter_tab = self._active_chapter_tab()
                 if active_chapter_tab is not None:
@@ -2302,49 +2324,13 @@ class MainWindow(QMainWindow):
             self._set_current_tree_subject(self.selected_subject)
         return True
 
-    def _delete_subchapter(self, subject_name: str, chapter_name: str, subchapter_name: str, *, save=True, show_errors=True):
-        subject = self._find_subject(subject_name)
-        chapter = self._find_chapter_record(subject, chapter_name)
-        if subject is None or chapter is None:
-            return False
-
-        subchapter_index = next(
-            (index for index, item in enumerate(chapter.subchapters) if item.lower() == subchapter_name.strip().lower()),
-            -1,
+    def _delete_subchapter(self, subject_name: str, parent_path: str, subchapter_name: str, *, save=True, show_errors=True):
+        return self._delete_chapter(
+            subject_name,
+            self._chapter_path(parent_path, subchapter_name),
+            save=save,
+            show_errors=show_errors,
         )
-        if subchapter_index < 0:
-            if show_errors:
-                QMessageBox.information(self, "Missing Subchapter", "That subchapter no longer exists.")
-            return False
-
-        actual_title = chapter.subchapters[subchapter_index]
-        leaf_path = self._chapter_path(chapter.title, actual_title)
-        confirm = QMessageBox.question(
-            self,
-            "Delete Subchapter",
-            f"Delete '{actual_title}' and its notebook and quiz content?",
-        )
-        if confirm != QMessageBox.StandardButton.Yes:
-            return False
-
-        del chapter.subchapters[subchapter_index]
-        self._delete_chapter_storage(subject.name, [leaf_path])
-        self._rebuild_subject_tree()
-
-        if save:
-            self._save_subjects()
-
-        self.select_subject(subject.name, update_tree=False, force_refresh=True)
-        if chapter.subchapters:
-            next_index = min(subchapter_index, len(chapter.subchapters) - 1)
-            next_leaf = self._chapter_path(chapter.title, chapter.subchapters[next_index])
-            self._set_current_tree_chapter(subject.name, next_leaf)
-            active_chapter_tab = self._active_chapter_tab()
-            if active_chapter_tab is not None:
-                active_chapter_tab.focus_chapter(next_leaf)
-        else:
-            self._set_current_tree_subject(subject.name)
-        return True
 
     def _move_chapter_up(self, subject_name: str, chapter_name: str, *, save=True):
         subject = self._find_subject(subject_name)
@@ -2404,52 +2390,29 @@ class MainWindow(QMainWindow):
 
         return True
 
-    def _move_subchapter_up(self, subject_name: str, chapter_name: str, subchapter_name: str, *, save=True):
+    def _move_subchapter_up(self, subject_name: str, parent_path: str, subchapter_name: str, *, save=True):
+        return self._move_nested_chapter(subject_name, self._chapter_path(parent_path, subchapter_name), direction=-1, save=save)
+
+    def _move_subchapter_down(self, subject_name: str, parent_path: str, subchapter_name: str, *, save=True):
+        return self._move_nested_chapter(subject_name, self._chapter_path(parent_path, subchapter_name), direction=1, save=save)
+
+    def _move_nested_chapter(self, subject_name: str, chapter_path: str, *, direction: int, save=True):
         subject = self._find_subject(subject_name)
-        chapter = self._find_chapter_record(subject, chapter_name)
-        if subject is None or chapter is None:
+        chapter, _parent, siblings = self._find_chapter_record_by_path(subject, chapter_path)
+        if subject is None or chapter is None or siblings is None:
             return False
 
-        subchapter_index = next(
-            (index for index, item in enumerate(chapter.subchapters) if item.lower() == subchapter_name.strip().lower()),
-            -1,
-        )
-        if subchapter_index <= 0:
+        chapter_index = next((index for index, item in enumerate(siblings) if item.title.lower() == chapter.title.lower()), -1)
+        target_index = chapter_index + direction
+        if chapter_index < 0 or target_index < 0 or target_index >= len(siblings):
             return False
 
-        chapter.subchapters[subchapter_index], chapter.subchapters[subchapter_index - 1] = (
-            chapter.subchapters[subchapter_index - 1],
-            chapter.subchapters[subchapter_index],
-        )
+        siblings[chapter_index], siblings[target_index] = siblings[target_index], siblings[chapter_index]
         self._rebuild_subject_tree()
         if save:
             self._save_subjects()
         if self.selected_subject and self.selected_subject.lower() == subject.name.lower():
-            self._set_current_tree_chapter(subject.name, self._chapter_path(chapter.title, subchapter_name))
-        return True
-
-    def _move_subchapter_down(self, subject_name: str, chapter_name: str, subchapter_name: str, *, save=True):
-        subject = self._find_subject(subject_name)
-        chapter = self._find_chapter_record(subject, chapter_name)
-        if subject is None or chapter is None:
-            return False
-
-        subchapter_index = next(
-            (index for index, item in enumerate(chapter.subchapters) if item.lower() == subchapter_name.strip().lower()),
-            -1,
-        )
-        if subchapter_index < 0 or subchapter_index >= len(chapter.subchapters) - 1:
-            return False
-
-        chapter.subchapters[subchapter_index], chapter.subchapters[subchapter_index + 1] = (
-            chapter.subchapters[subchapter_index + 1],
-            chapter.subchapters[subchapter_index],
-        )
-        self._rebuild_subject_tree()
-        if save:
-            self._save_subjects()
-        if self.selected_subject and self.selected_subject.lower() == subject.name.lower():
-            self._set_current_tree_chapter(subject.name, self._chapter_path(chapter.title, subchapter_name))
+            self._set_current_tree_chapter(subject.name, chapter_path)
         return True
 
     def _show_subject_menu_for_name(self, subject_name: str, global_position, parent_widget: QWidget):
@@ -2465,13 +2428,14 @@ class MainWindow(QMainWindow):
         elif chosen == delete_subject_action:
             self._delete_subject(subject_name)
 
-    def _show_chapter_menu_for_name(self, subject_name: str, chapter_name: str, global_position, parent_widget: QWidget):
+    def _show_chapter_menu_for_name(self, subject_name: str, chapter_path: str, global_position, parent_widget: QWidget):
         menu = QMenu(parent_widget)
         subject = self._find_subject(subject_name)
+        chapter, parent, siblings = self._find_chapter_record_by_path(subject, chapter_path)
         chapter_index = -1
-        if subject is not None:
+        if chapter is not None and siblings is not None:
             chapter_index = next(
-                (index for index, ch in enumerate(subject.chapters) if ch.title.lower() == chapter_name.strip().lower()),
+                (index for index, ch in enumerate(siblings) if ch.title.lower() == chapter.title.lower()),
                 -1,
             )
 
@@ -2480,60 +2444,71 @@ class MainWindow(QMainWindow):
         move_up_action.setEnabled(chapter_index > 0)
         move_down_action = menu.addAction("Move Down")
         move_down_action.setEnabled(
-            chapter_index >= 0 and chapter_index < (len(subject.chapters) - 1) if subject else False
+            chapter_index >= 0 and siblings is not None and chapter_index < (len(siblings) - 1)
         )
         menu.addSeparator()
         rename_chapter_action = menu.addAction("Rename Chapter...")
         delete_chapter_action = menu.addAction("Delete Chapter...")
         chosen = menu.exec(global_position)
         if chosen == add_subchapter_action:
-            self.prompt_add_subchapter(subject_name, chapter_name)
+            self.prompt_add_subchapter(subject_name, chapter_path)
         elif chosen == move_up_action:
-            self._move_chapter_up(subject_name, chapter_name)
+            if parent is None:
+                self._move_chapter_up(subject_name, chapter_path)
+            else:
+                self._move_nested_chapter(subject_name, chapter_path, direction=-1)
         elif chosen == move_down_action:
-            self._move_chapter_down(subject_name, chapter_name)
+            if parent is None:
+                self._move_chapter_down(subject_name, chapter_path)
+            else:
+                self._move_nested_chapter(subject_name, chapter_path, direction=1)
         elif chosen == rename_chapter_action:
-            self.prompt_rename_chapter(subject_name, chapter_name)
+            self.prompt_rename_chapter(subject_name, chapter_path)
         elif chosen == delete_chapter_action:
-            self._delete_chapter(subject_name, chapter_name)
+            self._delete_chapter(subject_name, chapter_path)
 
     def _show_subchapter_menu_for_name(
         self,
         subject_name: str,
-        chapter_name: str,
+        parent_path: str,
         subchapter_name: str,
         global_position,
         parent_widget: QWidget,
     ):
         menu = QMenu(parent_widget)
         subject = self._find_subject(subject_name)
-        chapter = self._find_chapter_record(subject, chapter_name)
+        parent_node, _grandparent, siblings = self._find_chapter_record_by_path(subject, parent_path)
+        full_path = self._chapter_path(parent_path, subchapter_name)
+        chapter, _parent, chapter_siblings = self._find_chapter_record_by_path(subject, full_path)
         subchapter_index = -1
-        if chapter is not None:
+        if chapter is not None and chapter_siblings is not None:
             subchapter_index = next(
-                (index for index, ch in enumerate(chapter.subchapters) if ch.lower() == subchapter_name.strip().lower()),
+                (index for index, ch in enumerate(chapter_siblings) if ch.title.lower() == subchapter_name.strip().lower()),
                 -1,
             )
 
+        add_subchapter_action = menu.addAction("Add Subchapter...")
         move_up_action = menu.addAction("Move Up")
         move_up_action.setEnabled(subchapter_index > 0)
         move_down_action = menu.addAction("Move Down")
         move_down_action.setEnabled(
-            subchapter_index >= 0 and chapter is not None and subchapter_index < (len(chapter.subchapters) - 1)
+            subchapter_index >= 0 and chapter_siblings is not None and subchapter_index < (len(chapter_siblings) - 1)
         )
         menu.addSeparator()
         rename_subchapter_action = menu.addAction("Rename Subchapter...")
         delete_subchapter_action = menu.addAction("Delete Subchapter...")
 
         chosen = menu.exec(global_position)
-        if chosen == move_up_action:
-            self._move_subchapter_up(subject_name, chapter_name, subchapter_name)
+        if chosen == add_subchapter_action:
+            self.prompt_add_subchapter(subject_name, full_path)
+        elif chosen == move_up_action:
+            self._move_subchapter_up(subject_name, parent_path, subchapter_name)
         elif chosen == move_down_action:
-            self._move_subchapter_down(subject_name, chapter_name, subchapter_name)
+            self._move_subchapter_down(subject_name, parent_path, subchapter_name)
         elif chosen == rename_subchapter_action:
-            self.prompt_rename_chapter(subject_name, subchapter_name, parent_chapter_name=chapter_name)
+            self.prompt_rename_chapter(subject_name, full_path)
         elif chosen == delete_subchapter_action:
-            self._delete_subchapter(subject_name, chapter_name, subchapter_name)
+            self._delete_subchapter(subject_name, parent_path, subchapter_name)
 
     def show_subject_context_menu(self, position):
         item = self.subject_tree.itemAt(position)
@@ -2551,11 +2526,11 @@ class MainWindow(QMainWindow):
         if item_kind == "subject" and isinstance(subject_name, str):
             self._show_subject_menu_for_name(subject_name, global_position, self.subject_tree)
         elif item_kind == "chapter" and isinstance(subject_name, str):
-            chapter_name = item.data(0, CHAPTER_NAME_ROLE)
-            if isinstance(chapter_name, str):
+            chapter_path = item.data(0, LEAF_PATH_ROLE)
+            if isinstance(chapter_path, str):
                 self._show_chapter_menu_for_name(
                     subject_name,
-                    chapter_name,
+                    chapter_path,
                     global_position,
                     self.subject_tree,
                 )
@@ -2602,7 +2577,7 @@ class MainWindow(QMainWindow):
         item_kind = item.data(0, ITEM_KIND_ROLE)
         subject_name = item.data(0, SUBJECT_NAME_ROLE)
         if item_kind == "chapter" and isinstance(subject_name, str):
-            chapter_name = item.data(0, CHAPTER_NAME_ROLE)
+            chapter_name = item.data(0, LEAF_PATH_ROLE)
             if isinstance(chapter_name, str):
                 self._show_chapter_menu_for_name(
                     subject_name,

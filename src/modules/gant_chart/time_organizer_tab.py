@@ -1,5 +1,6 @@
 import json
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -8,6 +9,7 @@ from PySide6.QtCore import QDate, QEvent, QObject, QSize, QTimer, Qt, Signal, QU
 from PySide6.QtGui import QColor, QPainter, QPen, QFont
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtWidgets import (
+    QApplication,
     QAbstractItemView,
     QAbstractScrollArea,
     QCalendarWidget,
@@ -32,6 +34,17 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+try:
+    import winsound
+except ImportError:  # pragma: no cover - only unavailable on non-Windows platforms
+    winsound = None
+
+
+def _runtime_root() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
+    return Path(__file__).resolve().parents[3]
 
 
 def slugify(value: str) -> str:
@@ -913,8 +926,12 @@ class TimeOrganizerController(QObject):
         
         # Initialize audio player for alarm
         self.audio_output = QAudioOutput(self)
+        self.audio_output.setVolume(1.0)
         self.media_player = QMediaPlayer(self)
         self.media_player.setAudioOutput(self.audio_output)
+        self._alarm_fallback_armed = False
+        if hasattr(self.media_player, "errorOccurred"):
+            self.media_player.errorOccurred.connect(self._on_alarm_media_error)
         
         self.time_tabs.setMinimumWidth(self.TIMER_PANEL_MIN_WIDTH)
 
@@ -2122,20 +2139,76 @@ class TimeOrganizerController(QObject):
 
     def _play_alarm_sound(self):
         """Play the alarm sound when timer completes."""
+        self._alarm_fallback_armed = True
+        alarm_path = self._resolve_alarm_sound_path()
+        if alarm_path is None:
+            self._play_platform_alarm_fallback()
+            return
+
         try:
-            # Get the path to the alarm sound file
-            alarm_path = (
-                Path(__file__).resolve().parents[3]
-                / "assets"
-                / "audio"
-                / "Classic Alarm Clock - Sound Effect  ProSounds.mp3"
-            )
-            if alarm_path.exists():
-                self.media_player.setSource(QUrl.fromLocalFile(str(alarm_path)))
-                self.media_player.play()
+            source = QUrl.fromLocalFile(str(alarm_path))
+            self.media_player.stop()
+            if self.media_player.source() == source:
+                self.media_player.setPosition(0)
+            else:
+                self.media_player.setSource(source)
+            self.media_player.play()
+            # Some Windows/packaged Qt builds accept the source but never start playback.
+            QTimer.singleShot(250, self._ensure_alarm_playback_started)
         except Exception:
-            # Silently fail if audio cannot be played
-            pass
+            self._play_platform_alarm_fallback()
+
+    def _resolve_alarm_sound_path(self) -> Path | None:
+        audio_root = _runtime_root() / "assets" / "audio"
+        preferred_names = [
+            "Classic Alarm Clock - Sound Effect  ProSounds.wav",
+            "Classic Alarm Clock - Sound Effect  ProSounds.mp3",
+        ]
+        candidates: list[Path] = [audio_root / name for name in preferred_names]
+        candidates.extend(sorted(audio_root.glob("*.wav")))
+        candidates.extend(sorted(audio_root.glob("*.mp3")))
+
+        seen: set[Path] = set()
+        for candidate in candidates:
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            if candidate.exists():
+                return candidate
+        return None
+
+    def _ensure_alarm_playback_started(self):
+        if not self._alarm_fallback_armed:
+            return
+        if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            self._alarm_fallback_armed = False
+            return
+        self._play_platform_alarm_fallback()
+
+    def _on_alarm_media_error(self, *args):
+        self._play_platform_alarm_fallback()
+
+    def _play_platform_alarm_fallback(self):
+        if not self._alarm_fallback_armed:
+            return
+        self._alarm_fallback_armed = False
+
+        if sys.platform.startswith("win") and winsound is not None:
+            try:
+                winsound.PlaySound(
+                    "SystemExclamation",
+                    winsound.SND_ALIAS | winsound.SND_ASYNC | winsound.SND_NODEFAULT,
+                )
+                return
+            except Exception:
+                pass
+            try:
+                winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
+                return
+            except Exception:
+                pass
+
+        QApplication.beep()
 
     def _record_activity(self, activity_type: str):
         """Record a completed activity."""

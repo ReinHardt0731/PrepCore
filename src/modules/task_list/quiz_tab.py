@@ -151,6 +151,10 @@ def split_leaf_path(chapter_path: str) -> tuple[str, str | None]:
     return chapter_title.strip(), subchapter_title.strip() or None
 
 
+def split_leaf_parts(chapter_path: str) -> list[str]:
+    return [part.strip() for part in chapter_path.strip().split(" / ") if part.strip()]
+
+
 @dataclass
 class QuizQuestion:
     question: str
@@ -1972,28 +1976,7 @@ class ChapterQuizTabController(QObject):
             self.branch_tree.addTopLevelItem(root)
 
             for chapter in self.bank.chapters:
-                chapter_title, subchapter_title = split_leaf_path(chapter.title)
-                parent_item = None
-                for index in range(root.childCount()):
-                    existing = root.child(index)
-                    if existing.text(0).lower() == chapter_title.lower():
-                        parent_item = existing
-                        break
-                if parent_item is None:
-                    parent_item = QTreeWidgetItem([chapter_title])
-                    parent_item.setData(0, BRANCH_ITEM_KIND_ROLE, "group")
-                    apply_font_to_item(parent_item, TreeFontConfig.QUIZ_CHAPTER_SIZE)
-                    root.addChild(parent_item)
-                if subchapter_title is None:
-                    parent_item.setData(0, BRANCH_ITEM_KIND_ROLE, "chapter")
-                    parent_item.setData(0, BRANCH_CHAPTER_TITLE_ROLE, chapter.title)
-                    continue
-                child = QTreeWidgetItem([subchapter_title])
-                child.setData(0, BRANCH_ITEM_KIND_ROLE, "chapter")
-                child.setData(0, BRANCH_CHAPTER_TITLE_ROLE, chapter.title)
-                apply_font_to_item(child, TreeFontConfig.QUIZ_SUBCHAPTER_SIZE)
-                parent_item.addChild(child)
-                parent_item.setExpanded(True)
+                self._ensure_branch_tree_item(root, chapter.title)
 
             root.setExpanded(True)
             self._sync_branch_tree_selection()
@@ -2012,23 +1995,47 @@ class ChapterQuizTabController(QObject):
             self.branch_tree.setCurrentItem(root)
         else:
             target_key = selected_chapter.title.lower()
-            matched_item = None
-            for index in range(root.childCount()):
-                child = root.child(index)
-                chapter_title = child.data(0, BRANCH_CHAPTER_TITLE_ROLE)
-                if isinstance(chapter_title, str) and chapter_title.lower() == target_key:
-                    matched_item = child
-                    break
-                for child_index in range(child.childCount()):
-                    grandchild = child.child(child_index)
-                    chapter_title = grandchild.data(0, BRANCH_CHAPTER_TITLE_ROLE)
-                    if isinstance(chapter_title, str) and chapter_title.lower() == target_key:
-                        matched_item = grandchild
-                        break
-                if matched_item is not None:
-                    break
+            matched_item = self._find_branch_tree_item(root, target_key)
             self.branch_tree.setCurrentItem(matched_item or root)
         self.branch_tree.blockSignals(False)
+
+    def _ensure_branch_tree_item(self, root: QTreeWidgetItem, chapter_path: str) -> QTreeWidgetItem | None:
+        parts = split_leaf_parts(chapter_path)
+        if not parts:
+            return None
+
+        parent = root
+        for depth, part in enumerate(parts):
+            existing = None
+            for index in range(parent.childCount()):
+                child = parent.child(index)
+                if child.text(0).lower() == part.lower():
+                    existing = child
+                    break
+            if existing is None:
+                existing = QTreeWidgetItem([part])
+                existing.setData(0, BRANCH_ITEM_KIND_ROLE, "group")
+                apply_font_to_item(
+                    existing,
+                    TreeFontConfig.QUIZ_CHAPTER_SIZE if depth == 0 else TreeFontConfig.QUIZ_SUBCHAPTER_SIZE,
+                )
+                parent.addChild(existing)
+                parent.setExpanded(True)
+            parent = existing
+
+        parent.setData(0, BRANCH_ITEM_KIND_ROLE, "chapter")
+        parent.setData(0, BRANCH_CHAPTER_TITLE_ROLE, chapter_path)
+        return parent
+
+    def _find_branch_tree_item(self, root: QTreeWidgetItem, target_key: str) -> QTreeWidgetItem | None:
+        chapter_title = root.data(0, BRANCH_CHAPTER_TITLE_ROLE)
+        if isinstance(chapter_title, str) and chapter_title.lower() == target_key:
+            return root
+        for index in range(root.childCount()):
+            found = self._find_branch_tree_item(root.child(index), target_key)
+            if found is not None:
+                return found
+        return None
 
     def _refresh_ui(self):
         if self._is_long_quiz():
@@ -2090,38 +2097,63 @@ class ChapterQuizTabController(QObject):
 
     def _find_chapter_tree_item(self, normalized_path: str) -> QTreeWidgetItem | None:
         for index in range(self.chapter_list.topLevelItemCount()):
-            item = self.chapter_list.topLevelItem(index)
-            stored_path = item.data(0, TREE_LEAF_PATH_ROLE)
-            if isinstance(stored_path, str) and stored_path.lower() == normalized_path:
+            item = self._find_tree_item_by_leaf_path(self.chapter_list.topLevelItem(index), normalized_path)
+            if item is not None:
                 return item
-            for child_index in range(item.childCount()):
-                child = item.child(child_index)
-                stored_path = child.data(0, TREE_LEAF_PATH_ROLE)
-                if isinstance(stored_path, str) and stored_path.lower() == normalized_path:
-                    return child
+        return None
+
+    def _find_tree_item_by_leaf_path(self, item: QTreeWidgetItem, normalized_path: str) -> QTreeWidgetItem | None:
+        stored_path = item.data(0, TREE_LEAF_PATH_ROLE)
+        if isinstance(stored_path, str) and stored_path.lower() == normalized_path:
+            return item
+        for child_index in range(item.childCount()):
+            found = self._find_tree_item_by_leaf_path(item.child(child_index), normalized_path)
+            if found is not None:
+                return found
         return None
 
     def _refresh_chapter_tree(self):
         self.chapter_list.blockSignals(True)
         self.chapter_list.clear()
-        roots: dict[str, QTreeWidgetItem] = {}
         for chapter in self.bank.chapters:
-            chapter_title, subchapter_title = split_leaf_path(chapter.title)
-            parent_item = roots.get(chapter_title.lower())
-            if parent_item is None:
-                parent_item = QTreeWidgetItem([chapter_title])
-                roots[chapter_title.lower()] = parent_item
-                apply_font_to_item(parent_item, TreeFontConfig.QUIZ_CHAPTER_SIZE)
-                self.chapter_list.addTopLevelItem(parent_item)
-            if subchapter_title is None:
-                parent_item.setData(0, TREE_LEAF_PATH_ROLE, chapter.title)
-                continue
-            child_item = QTreeWidgetItem([subchapter_title])
-            child_item.setData(0, TREE_LEAF_PATH_ROLE, chapter.title)
-            apply_font_to_item(child_item, TreeFontConfig.QUIZ_SUBCHAPTER_SIZE)
-            parent_item.addChild(child_item)
-            parent_item.setExpanded(True)
+            self._ensure_leaf_path_item(self.chapter_list, chapter.title)
         self.chapter_list.blockSignals(False)
+
+    def _ensure_leaf_path_item(self, tree: QTreeWidget, chapter_path: str) -> QTreeWidgetItem | None:
+        parts = split_leaf_parts(chapter_path)
+        if not parts:
+            return None
+
+        parent_item: QTreeWidgetItem | None = None
+        for depth, part in enumerate(parts):
+            existing = self._find_child_item(tree, parent_item, part)
+            if existing is None:
+                existing = QTreeWidgetItem([part])
+                if parent_item is None:
+                    tree.addTopLevelItem(existing)
+                    apply_font_to_item(existing, TreeFontConfig.QUIZ_CHAPTER_SIZE)
+                else:
+                    parent_item.addChild(existing)
+                    apply_font_to_item(existing, TreeFontConfig.QUIZ_SUBCHAPTER_SIZE)
+                    parent_item.setExpanded(True)
+            parent_item = existing
+
+        if parent_item is not None:
+            parent_item.setData(0, TREE_LEAF_PATH_ROLE, chapter_path)
+        return parent_item
+
+    def _find_child_item(
+        self,
+        tree: QTreeWidget,
+        parent_item: QTreeWidgetItem | None,
+        title: str,
+    ) -> QTreeWidgetItem | None:
+        count = tree.topLevelItemCount() if parent_item is None else parent_item.childCount()
+        for index in range(count):
+            item = tree.topLevelItem(index) if parent_item is None else parent_item.child(index)
+            if item.text(0).lower() == title.lower():
+                return item
+        return None
 
     def _sync_chapter_tree_selection(self):
         self.chapter_list.blockSignals(True)
