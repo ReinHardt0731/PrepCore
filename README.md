@@ -1,28 +1,5 @@
 # PrepCore - Board Exam Preparation Application
 
-## Directory Structure
-
-```
-PrepCore/
-├── bin/                    # Application executable
-│   └── PrepCore.exe       # Main application launcher
-├── assets/                # Runtime assets (libraries, icons, sounds, data)
-├── config/                # Configuration files (for future use)
-├── docs/                  # Documentation
-├── scripts/               # Utility scripts
-├── logs/                  # Application logs
-├── temp/                  # Temporary files
-├── tests/                 # Test files
-└── README.md             # This file
-```
-
-## Quick Start
-
-1. Double-click `bin/PrepCore.exe` to launch the application
-2. On first launch, the app will start blank
-3. Add subjects and chapters through the UI
-4. Import quiz banks and create study plans
-
 ## Features
 
 - 📚 **Subject Management**: Organize studies by subject and chapter
